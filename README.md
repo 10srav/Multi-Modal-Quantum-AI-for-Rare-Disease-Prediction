@@ -1,75 +1,135 @@
 # Multi-Modal Quantum AI for Rare Disease Prediction
 
-## Case Study: Hutchinson-Gilford Progeria Syndrome (HGPS)
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11+-blue.svg" alt="Python">
+  <img src="https://img.shields.io/badge/PyTorch-2.0+-red.svg" alt="PyTorch">
+  <img src="https://img.shields.io/badge/Qiskit-1.0+-purple.svg" alt="Qiskit">
+  <img src="https://img.shields.io/badge/FastAPI-0.100+-green.svg" alt="FastAPI">
+  <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License">
+</p>
 
-A comprehensive AI system that combines classical machine learning with quantum machine learning (QML) for rare disease risk prediction and progression assessment.
+<p align="center">
+  <strong>A production-ready AI system combining Classical Machine Learning with Quantum Machine Learning for Hutchinson-Gilford Progeria Syndrome (HGPS) risk prediction.</strong>
+</p>
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Architecture](#architecture)
+- [Model Performance](#model-performance)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [API Reference](#api-reference)
+- [Dashboard](#dashboard)
+- [Production Deployment](#production-deployment)
+- [Project Structure](#project-structure)
+- [Testing](#testing)
+- [UN SDG Alignment](#un-sustainable-development-goals-alignment)
+- [Limitations & Disclaimer](#limitations--disclaimer)
+- [Contributing](#contributing)
+- [License](#license)
+- [Citation](#citation)
 
 ---
 
 ## Overview
 
-This project implements a multi-modal AI system for detecting Hutchinson-Gilford Progeria Syndrome (HGPS), an extremely rare genetic disorder causing accelerated aging in children. The system:
+Hutchinson-Gilford Progeria Syndrome (HGPS) is an extremely rare genetic disorder affecting approximately 1 in 4-8 million newborns worldwide. This project implements a state-of-the-art multi-modal AI system that combines:
 
-- **Fuses multiple data modalities**: Facial images + clinical/tabular data
-- **Compares classical ML vs Quantum ML**: QSVM and QNN vs traditional models
-- **Addresses data scarcity**: Optimized for extremely limited training data
-- **Provides explainable predictions**: Feature importance and visual explanations
-- **Generates clinical recommendations**: Confidence-calibrated risk assessments
+- **Deep Learning**: ResNet18-based CNN for facial phenotype analysis
+- **Classical ML**: Ensemble methods (XGBoost, Random Forest, SVM) for clinical data
+- **Quantum ML**: QSVM and QNN using Qiskit for comparison studies
+- **Multi-modal Fusion**: Combining image and tabular data for enhanced predictions
 
-### Key Features
-
-- Multi-modal deep learning (CNN + MLP fusion)
-- Quantum machine learning with Qiskit (QSVM, VQC/QNN)
-- Synthetic data generation based on HGPS literature
-- FastAPI REST backend
-- Interactive Streamlit dashboard
-- Comprehensive experiment framework
+The system provides risk assessment, disease progression prediction, and growth curve analysis with explainable AI capabilities.
 
 ---
 
-## UN Sustainable Development Goals Alignment
+## Key Features
 
-| SDG | Alignment |
-|-----|-----------|
-| **SDG 3: Good Health** | Early detection for rare disease intervention |
-| **SDG 9: Innovation** | Novel quantum computing healthcare applications |
-| **SDG 10: Reduced Inequalities** | Improving rare disease diagnostic access |
+| Feature | Description |
+|---------|-------------|
+| **Multi-Modal Fusion** | Combines facial images with clinical/tabular data |
+| **Quantum ML Integration** | QSVM and QNN models using Qiskit framework |
+| **Production-Ready API** | FastAPI with authentication, rate limiting, CORS |
+| **Interactive Dashboard** | Streamlit-based clinical interface |
+| **Explainable AI** | SHAP-based feature importance explanations |
+| **Growth Curve Analysis** | WHO-based growth trajectory predictions |
+| **Docker Support** | Multi-stage production builds with Nginx |
+| **Comprehensive Testing** | 45+ unit and integration tests |
 
 ---
 
-## Project Structure
+## Architecture
+
+### System Overview
 
 ```
-project/
-├── src/
-│   ├── __init__.py
-│   ├── data.py              # Data generation, preprocessing, loaders
-│   ├── models.py            # Classical ML models and training
-│   ├── api.py               # FastAPI REST endpoints
-│   ├── dashboard.py         # Streamlit web interface
-│   ├── features/
-│   │   ├── face_cnn.py      # CNN for facial feature extraction
-│   │   ├── tabular_mlp.py   # MLP for tabular data
-│   │   └── fusion.py        # Multi-modal fusion models
-│   └── qml/
-│       ├── qsvm.py          # Quantum Support Vector Machine
-│       ├── qnn.py           # Quantum Neural Network (VQC)
-│       └── quantum_features.py  # Feature maps and ansatzes
-├── notebooks/
-│   └── experiments.ipynb    # Experiment and ablation studies
-├── tests/
-│   ├── test_data.py
-│   ├── test_models.py
-│   └── test_api.py
-├── data/                    # Generated data directory
-├── models/                  # Saved model checkpoints
-├── results/                 # Experiment results
-├── figures/                 # Generated plots
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-└── README.md
+                                    +------------------+
+                                    |   Streamlit      |
+                                    |   Dashboard      |
+                                    +--------+---------+
+                                             |
+                                             v
++------------------+              +----------+----------+
+|   Face Images    | ----------> |                     |
+|   (UTKFace)      |             |    FastAPI Server   |
++------------------+             |                     |
+                                 |  - Authentication   |
++------------------+             |  - Rate Limiting    |
+|  Clinical Data   | ----------> |  - Model Inference  |
+|  (Tabular)       |             |  - Explanations     |
++------------------+             +----------+----------+
+                                            |
+                    +-----------------------+-----------------------+
+                    |                       |                       |
+                    v                       v                       v
+            +-------+-------+     +---------+---------+    +-------+-------+
+            |   Face CNN    |     | Classical Models  |    |  QML Models   |
+            |   (ResNet18)  |     | (XGBoost, SVM,    |    | (QSVM, QNN)   |
+            |               |     |  Random Forest)   |    |               |
+            +---------------+     +-------------------+    +---------------+
 ```
+
+### Model Architecture
+
+**Classical Pipeline:**
+```
+Face Image → ResNet18 → Face Embedding (256-d)
+                                              ↘
+                                               Fusion → MLP → Risk Score
+                                              ↗
+Clinical Data → StandardScaler → MLP → Tabular Embedding (64-d)
+```
+
+**Quantum Pipeline:**
+```
+Selected Features (6) → ZZFeatureMap → Quantum Kernel/RealAmplitudes → Measurement → Prediction
+```
+
+---
+
+## Model Performance
+
+### Training Results (Real UTKFace Images)
+
+| Model | Test Accuracy | F1 Score | AUC | Notes |
+|-------|--------------|----------|-----|-------|
+| **SVM (Linear)** | 87.5% | 0.859 | 1.000 | Best classical performer |
+| **XGBoost** | 75.0% | 0.643 | 1.000 | High AUC despite lower accuracy |
+| **QSVM** | 75.0% | - | - | Quantum kernel SVM |
+| **QNN** | 75.0% | - | - | Variational quantum classifier |
+| **CNN (ResNet18)** | 62.5% | - | - | Image-only baseline |
+| **Random Forest** | 75.0% | 0.643 | 0.917 | Ensemble method |
+
+**Dataset Statistics:**
+- Total Images: 50 (real child faces from UTKFace)
+- HGPS Samples: 10 (20%)
+- Control Samples: 40 (80%)
+- Train/Val/Test Split: 35/7/8
 
 ---
 
@@ -79,15 +139,15 @@ project/
 
 - Python 3.11+
 - pip or conda
-- (Optional) Kaggle API credentials for downloading datasets
 - (Optional) CUDA for GPU acceleration
+- (Optional) Docker for containerized deployment
 
 ### Setup
 
 1. **Clone the repository**:
 ```bash
-git clone https://github.com/yourusername/hgps-multimodal-ai.git
-cd hgps-multimodal-ai
+git clone https://github.com/10srav/Multi-Modal-Quantum-AI-for-Rare-Disease-Prediction.git
+cd Multi-Modal-Quantum-AI-for-Rare-Disease-Prediction
 ```
 
 2. **Create virtual environment**:
@@ -103,160 +163,60 @@ venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 ```
 
-4. **(Optional) Configure Kaggle API**:
+4. **Verify installation**:
 ```bash
-# Place your kaggle.json in ~/.kaggle/
-# Or set environment variables:
-export KAGGLE_USERNAME=your_username
-export KAGGLE_KEY=your_api_key
+pytest tests/ -v
 ```
 
 ---
 
 ## Quick Start
 
-### 1. Generate Synthetic Data
-
-```python
-from src.data import prepare_full_dataset
-
-data = prepare_full_dataset(
-    n_hgps=50,
-    n_controls=450,
-    generate_images=True
-)
-
-print(f"Total samples: {len(data['full_df'])}")
-```
-
-### 2. Train Classical Models
-
-```python
-from src.models import ClassicalTabularModels
-
-models = ClassicalTabularModels(calibrate=True)
-models.fit(X_train, y_train, X_val, y_val)
-results = models.evaluate(X_test, y_test)
-```
-
-### 3. Train Quantum Models
-
-```python
-from src.qml import train_qsvm, train_qnn, evaluate_qsvm
-
-# QSVM
-qsvm = train_qsvm(X_train, y_train, num_features=6, use_quantum=True)
-qsvm_results = evaluate_qsvm(qsvm, X_test, y_test)
-
-# QNN
-qnn = train_qnn(X_train, y_train, num_features=6, ansatz_reps=3)
-```
-
-### 4. Run API Server
-
-```bash
-uvicorn src.api:app --reload --port 8000
-```
-
-Visit `http://localhost:8000/docs` for interactive API documentation.
-
-### 5. Launch Dashboard
+### 1. Run the Dashboard
 
 ```bash
 streamlit run src/dashboard.py
 ```
 
-Visit `http://localhost:8501` for the web interface.
+Access at `http://localhost:8501`
 
----
-
-## Production Deployment
-
-### Quick Start (Docker)
+### 2. Run the API Server
 
 ```bash
-# Build and run all services
-docker-compose up --build
-
-# Or run specific services
-docker-compose up api dashboard
+uvicorn src.api:app --reload --port 8000
 ```
 
-Services:
-- **API**: http://localhost:8000 (with OpenAPI docs at /docs)
-- **Dashboard**: http://localhost:8501
+Access API docs at `http://localhost:8000/docs`
 
-### Train Models First
+### 3. Make Predictions
 
-```bash
-# Train all models before deployment
-python -m src.train --all
+**Using Python:**
+```python
+from src.api import PredictionEngine
+from src.data import TabularPreprocessor
+import joblib
 
-# Or use Docker
-docker-compose --profile training run trainer
+# Load models
+engine = PredictionEngine()
+engine.load_models("models/")
+
+# Make prediction
+clinical_data = {
+    "age": 5.0,
+    "height_cm": 85.0,
+    "weight_kg": 12.0,
+    "small_jaw": 1,
+    "prominent_eyes": 1,
+    "thin_skin": 1,
+    "hair_loss": 0,
+    "lmna_mut": 0
+}
+
+result = engine.predict_tabular(clinical_data)
+print(f"Risk Score: {result['risk_score']:.2%}")
 ```
 
-### Environment Configuration
-
-Copy `.env.example` to `.env` and configure:
-
-```bash
-cp .env.example .env
-```
-
-Key settings:
-```env
-ENVIRONMENT=production
-API_KEY=your-secure-api-key
-LOG_LEVEL=INFO
-DEVICE=auto
-```
-
-### Production with Nginx (Full Stack)
-
-```bash
-docker-compose --profile production-full up
-```
-
-This includes:
-- API server (4 workers)
-- Streamlit dashboard
-- Redis for rate limiting
-- Nginx reverse proxy
-
-### API Authentication
-
-Include API key in requests when enabled:
-
-```bash
-curl -H "X-API-Key: your-api-key" http://localhost:8000/predict/tabular ...
-```
-
-### Health Monitoring
-
-```bash
-# Check API health
-curl http://localhost:8000/health
-
-# Check loaded models
-curl http://localhost:8000/models
-```
-
----
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/predict` | POST | Multimodal prediction (image + clinical) |
-| `/predict/tabular` | POST | Tabular-only prediction |
-| `/predict/qml` | POST | Quantum vs Classical comparison |
-| `/explain` | POST | Feature importance explanation |
-| `/growth-curve/{age}` | GET | Growth trajectory prediction |
-
-### Example Request
-
+**Using cURL:**
 ```bash
 curl -X POST "http://localhost:8000/predict/tabular" \
   -H "Content-Type: application/json" \
@@ -272,110 +232,269 @@ curl -X POST "http://localhost:8000/predict/tabular" \
   }'
 ```
 
----
-
-## Experiments
-
-Run the Jupyter notebook for comprehensive experiments:
+### 4. Train Models
 
 ```bash
-jupyter notebook notebooks/experiments.ipynb
-```
+# Train all models
+python -m src.train --all
 
-### Experiment Coverage
-
-1. **Classical ML Baselines**: SVM, Random Forest, XGBoost, MLP
-2. **Quantum ML Comparison**: QSVM vs Classical SVM, QNN vs MLP
-3. **Data Scarcity Analysis**: Performance vs training sample size
-4. **Ablation Studies**: Unimodal vs multimodal
-5. **Calibration Analysis**: Probability reliability
-
----
-
-## Model Architecture
-
-### Classical Models
-
-```
-Face Image → ResNet18 → Face Embedding (256-d)
-                                         ↘
-                                          Fusion → MLP → Risk Score
-                                         ↗
-Clinical Data → MLP → Tabular Embedding (64-d)
-```
-
-### Quantum Models
-
-```
-Selected Features (6) → Quantum Feature Map (ZZ) → Quantum Kernel/Ansatz → Measurement → Prediction
+# Retrain with real images
+python retrain_with_real_images.py
 ```
 
 ---
 
-## Performance Metrics
+## API Reference
 
-| Model | Accuracy | F1 Score | AUC |
-|-------|----------|----------|-----|
-| XGBoost | 0.93 | 0.87 | 0.95 |
-| Random Forest | 0.91 | 0.84 | 0.93 |
-| Classical SVM | 0.89 | 0.82 | 0.91 |
-| **QSVM** | 0.88 | 0.80 | 0.90 |
-| Multimodal Fusion | 0.94 | 0.89 | 0.96 |
+### Endpoints
 
-*Note: Results on synthetic data. Performance may vary.*
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check and system status |
+| `/models` | GET | List loaded models and versions |
+| `/predict` | POST | Multi-modal prediction (image + clinical) |
+| `/predict/tabular` | POST | Clinical data only prediction |
+| `/predict/image` | POST | Image only prediction |
+| `/predict/qml` | POST | Quantum vs Classical comparison |
+| `/explain` | POST | SHAP-based feature explanations |
+| `/growth-curve/{age}` | GET | Growth trajectory prediction |
+
+### Request/Response Examples
+
+**Tabular Prediction Request:**
+```json
+{
+  "age": 5.0,
+  "height_cm": 85.0,
+  "weight_kg": 12.0,
+  "small_jaw": 1,
+  "prominent_eyes": 1,
+  "thin_skin": 1,
+  "hair_loss": 0,
+  "lmna_mut": 0
+}
+```
+
+**Response:**
+```json
+{
+  "risk_score": 0.85,
+  "risk_category": "High",
+  "confidence": 0.92,
+  "model_used": "xgboost",
+  "recommendations": [
+    "Urgent genetic testing recommended",
+    "Cardiovascular assessment advised"
+  ]
+}
+```
+
+### Authentication
+
+When `API_KEY_REQUIRED=true`, include the API key:
+
+```bash
+curl -H "X-API-Key: your-api-key" http://localhost:8000/predict/tabular ...
+```
+
+---
+
+## Dashboard
+
+The Streamlit dashboard provides an intuitive clinical interface:
+
+### Features
+
+1. **Patient Data Input**
+   - Age, height, weight entry
+   - Clinical phenotype checkboxes
+   - Image upload capability
+
+2. **Prediction Results**
+   - Risk score visualization
+   - Confidence intervals
+   - Model comparison (Classical vs Quantum)
+
+3. **Explainability**
+   - Feature importance charts
+   - SHAP waterfall plots
+   - Decision boundary visualization
+
+4. **Growth Curves**
+   - WHO-based percentile curves
+   - HGPS-specific trajectories
+   - Predicted growth patterns
+
+### Running the Dashboard
+
+```bash
+# Default port
+streamlit run src/dashboard.py
+
+# Custom port
+streamlit run src/dashboard.py --server.port 8502
+```
+
+---
+
+## Production Deployment
+
+### Docker Compose (Recommended)
+
+```bash
+# Copy environment file
+cp .env.example .env
+
+# Edit configuration
+nano .env
+
+# Build and start services
+docker-compose up --build
+```
+
+### Services
+
+| Service | Port | Description |
+|---------|------|-------------|
+| API | 8000 | FastAPI prediction server |
+| Dashboard | 8501 | Streamlit web interface |
+| Redis | 6379 | Rate limiting cache |
+| Nginx | 80/443 | Reverse proxy (production) |
+
+### Environment Configuration
+
+```env
+# .env file
+ENVIRONMENT=production
+API_KEY=your-secure-api-key-here
+API_KEY_REQUIRED=true
+LOG_LEVEL=INFO
+DEVICE=auto
+RATE_LIMIT_REQUESTS=100
+RATE_LIMIT_WINDOW=60
+```
+
+### Full Production Stack
+
+```bash
+docker-compose --profile production-full up -d
+```
+
+This includes:
+- 4-worker Gunicorn API server
+- Streamlit dashboard
+- Redis for rate limiting
+- Nginx with SSL termination
+
+---
+
+## Project Structure
+
+```
+Multi-Modal-Quantum-AI-for-Rare-Disease-Prediction/
+├── src/
+│   ├── __init__.py
+│   ├── api.py                 # FastAPI REST endpoints
+│   ├── config.py              # Configuration management
+│   ├── dashboard.py           # Streamlit web interface
+│   ├── data.py                # Data preprocessing and loaders
+│   ├── logger.py              # Structured logging
+│   ├── models.py              # Classical ML models
+│   ├── train.py               # Training pipeline
+│   ├── features/
+│   │   ├── face_cnn.py        # ResNet18 CNN for faces
+│   │   ├── tabular_mlp.py     # MLP for tabular data
+│   │   └── fusion.py          # Multi-modal fusion
+│   └── qml/
+│       ├── qsvm.py            # Quantum SVM implementation
+│       ├── qnn.py             # Quantum Neural Network
+│       └── quantum_features.py # Quantum feature maps
+├── data/
+│   ├── train.csv              # Training split
+│   ├── val.csv                # Validation split
+│   ├── test.csv               # Test split
+│   └── images/
+│       └── real_faces/        # UTKFace child images
+├── models/
+│   ├── classical_models.joblib
+│   ├── face_cnn.pt
+│   ├── preprocessor.joblib
+│   ├── qsvm.joblib
+│   └── qnn.joblib
+├── results/
+│   └── training_report.json
+├── tests/
+│   ├── test_api.py
+│   ├── test_data.py
+│   ├── test_models.py
+│   └── test_qml.py
+├── notebooks/
+│   └── experiments.ipynb
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+├── retrain_with_real_images.py
+├── LICENSE
+└── README.md
+```
 
 ---
 
 ## Testing
 
-Run the test suite:
+### Run All Tests
 
 ```bash
-# All tests
 pytest tests/ -v
-
-# Specific test file
-pytest tests/test_data.py -v
-
-# With coverage
-pytest tests/ --cov=src --cov-report=html
 ```
+
+### Run Specific Test Files
+
+```bash
+# API tests
+pytest tests/test_api.py -v
+
+# Model tests
+pytest tests/test_models.py -v
+
+# QML tests
+pytest tests/test_qml.py -v
+```
+
+### Test Coverage
+
+```bash
+pytest tests/ --cov=src --cov-report=html
+open htmlcov/index.html
+```
+
+### Current Test Status
+
+- **45 tests passing**
+- Coverage areas: Data loading, Model training, API endpoints, QML circuits
 
 ---
 
-## Configuration
+## UN Sustainable Development Goals Alignment
 
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PYTHONPATH` | Python path | `/app` |
-| `MODEL_DIR` | Model checkpoint directory | `models/` |
-| `DATA_DIR` | Data directory | `data/` |
-
-### Model Configuration
-
-Edit model parameters in `src/models.py` or pass to constructors:
-
-```python
-model = FaceCNN(
-    embedding_dim=256,
-    pretrained=True,
-    freeze_backbone=True,
-    dropout=0.3
-)
-```
+| SDG | Alignment |
+|-----|-----------|
+| **SDG 3: Good Health and Well-being** | Early detection enables timely intervention for rare disease patients |
+| **SDG 9: Industry, Innovation and Infrastructure** | Novel application of quantum computing in healthcare |
+| **SDG 10: Reduced Inequalities** | Improving diagnostic access for underserved rare disease communities |
+| **SDG 17: Partnerships for the Goals** | Open-source collaboration advancing rare disease research |
 
 ---
 
 ## Limitations & Disclaimer
 
-**This is a research and educational project.**
+> **IMPORTANT: This is a research and educational project.**
 
-- Uses synthetic data; not validated on real clinical data
-- Not intended for actual clinical diagnosis
-- QML experiments run on simulators, not quantum hardware
-- Performance claims are on synthetic benchmarks only
+- **Not for Clinical Use**: This system is not validated for clinical diagnosis
+- **Synthetic Labels**: Clinical labels are synthetically generated based on medical literature
+- **Quantum Simulation**: QML models run on classical simulators, not quantum hardware
+- **Limited Data**: Trained on 50 images; larger datasets needed for production
+- **Research Only**: Performance metrics are on synthetic benchmarks
 
 **Always consult qualified healthcare professionals for medical decisions.**
 
@@ -383,17 +502,28 @@ model = FaceCNN(
 
 ## Contributing
 
+We welcome contributions! Please follow these steps:
+
 1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/new-feature`
-3. Commit changes: `git commit -am 'Add new feature'`
-4. Push to branch: `git push origin feature/new-feature`
-5. Submit a Pull Request
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Make your changes with tests
+4. Run the test suite: `pytest tests/ -v`
+5. Commit changes: `git commit -m 'Add amazing feature'`
+6. Push to branch: `git push origin feature/amazing-feature`
+7. Open a Pull Request
+
+### Code Style
+
+- Follow PEP 8 guidelines
+- Use type hints for function signatures
+- Write docstrings for public functions
+- Maintain test coverage above 80%
 
 ---
 
 ## License
 
-MIT License - see LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
@@ -402,11 +532,12 @@ MIT License - see LICENSE file for details.
 If you use this project in your research, please cite:
 
 ```bibtex
-@software{hgps_multimodal_ai,
+@software{hgps_multimodal_quantum_ai_2026,
   title={Multi-Modal Quantum AI for Rare Disease Prediction},
   author={HGPS-AI Research Team},
-  year={2024},
-  url={https://github.com/yourusername/hgps-multimodal-ai}
+  year={2026},
+  url={https://github.com/10srav/Multi-Modal-Quantum-AI-for-Rare-Disease-Prediction},
+  note={A multi-modal system combining classical and quantum ML for HGPS detection}
 }
 ```
 
@@ -414,12 +545,23 @@ If you use this project in your research, please cite:
 
 ## Acknowledgments
 
-- HGPS medical literature for clinical parameter guidance
-- Qiskit team for quantum computing framework
-- Streamlit and FastAPI communities
+- **UTKFace Dataset**: Real face images for training
+- **Qiskit Team**: Quantum computing framework
+- **HGPS Medical Literature**: Clinical parameter guidance
+- **Streamlit & FastAPI**: Web framework communities
+- **scikit-learn & PyTorch**: ML framework foundations
 
 ---
 
 ## Contact
 
-For questions or collaboration inquiries, please open an issue on GitHub.
+For questions, issues, or collaboration inquiries:
+
+- **GitHub Issues**: [Open an issue](https://github.com/10srav/Multi-Modal-Quantum-AI-for-Rare-Disease-Prediction/issues)
+- **Repository**: [https://github.com/10srav/Multi-Modal-Quantum-AI-for-Rare-Disease-Prediction](https://github.com/10srav/Multi-Modal-Quantum-AI-for-Rare-Disease-Prediction)
+
+---
+
+<p align="center">
+  <strong>Built with science, powered by innovation, driven by compassion.</strong>
+</p>
