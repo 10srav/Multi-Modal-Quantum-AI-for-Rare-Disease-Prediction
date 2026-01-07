@@ -1,25 +1,33 @@
 """
 FastAPI Backend for HGPS Multi-Modal AI System
 
-Provides REST API endpoints for:
+Production-ready API with:
 - Risk prediction from face images and clinical data
 - Quantum ML comparison predictions
 - Model explanations (SHAP, GradCAM)
 - Health status monitoring
+- API authentication and rate limiting
 """
 
 import io
+import os
 import base64
 import logging
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+from collections import defaultdict
+from functools import wraps
 
 import numpy as np
 import cv2
+import joblib
 from PIL import Image
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Depends, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 import torch
 import uvicorn
@@ -28,9 +36,14 @@ import uvicorn
 from .data import FacePreprocessor, TabularPreprocessor, generate_hgps_tabular_data
 from .features import LateFusionClassifier
 from .models import ClassicalTabularModels
+from .config import settings
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=getattr(logging, settings.log_level),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
+
 
 # ============================================================================
 # API CONFIGURATION
@@ -43,23 +56,87 @@ app = FastAPI(
 
     Provides risk assessment and progression prediction for
     Hutchinson-Gilford Progeria Syndrome (HGPS) using:
-    - Facial image analysis
-    - Clinical/tabular data
-    - Classical and Quantum ML models
+    - Facial image analysis (CNN)
+    - Clinical/tabular data (Classical ML)
+    - Classical and Quantum ML models (QSVM, QNN)
+
+    ## Authentication
+    Include API key in header: `X-API-Key: your-api-key`
+
+    ## Rate Limiting
+    Default: 100 requests per minute
     """,
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    contact={
+        "name": "HGPS AI Team",
+        "email": "support@hgps-ai.com"
+    }
 )
 
-# CORS middleware for web dashboard
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.api.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ============================================================================
+# SECURITY & RATE LIMITING
+# ============================================================================
+
+API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+# In-memory rate limiting (use Redis in production)
+rate_limit_store: Dict[str, List[float]] = defaultdict(list)
+
+
+async def verify_api_key(api_key: str = Security(API_KEY_HEADER)) -> Optional[str]:
+    """Verify API key if authentication is enabled."""
+    if not settings.api.api_key:
+        return "anonymous"
+
+    if not api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="API key required. Include X-API-Key header."
+        )
+
+    if api_key != settings.api.api_key:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid API key"
+        )
+
+    return api_key
+
+
+async def rate_limit(request: Request):
+    """Simple rate limiting middleware."""
+    client_ip = request.client.host if request.client else "unknown"
+    current_time = time.time()
+    window = 60  # 1 minute window
+
+    # Clean old entries
+    rate_limit_store[client_ip] = [
+        t for t in rate_limit_store[client_ip]
+        if current_time - t < window
+    ]
+
+    # Check limit
+    if len(rate_limit_store[client_ip]) >= settings.api.rate_limit:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Max {settings.api.rate_limit} requests per minute."
+        )
+
+    # Record request
+    rate_limit_store[client_ip].append(current_time)
+
 
 # ============================================================================
 # PYDANTIC MODELS
@@ -75,6 +152,20 @@ class ClinicalData(BaseModel):
     thin_skin: int = Field(0, ge=0, le=1, description="Thin skin indicator")
     hair_loss: int = Field(0, ge=0, le=1, description="Hair loss indicator")
     lmna_mut: int = Field(0, ge=0, le=1, description="LMNA mutation indicator")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "age": 5.0,
+                "height_cm": 85.0,
+                "weight_kg": 12.0,
+                "small_jaw": 1,
+                "prominent_eyes": 1,
+                "thin_skin": 0,
+                "hair_loss": 0,
+                "lmna_mut": 0
+            }
+        }
 
 
 class PredictionResponse(BaseModel):
@@ -99,7 +190,7 @@ class ExplanationResponse(BaseModel):
     """Model explanation response."""
     feature_importance: Dict[str, float]
     shap_values: Optional[List[float]] = None
-    gradcam_image: Optional[str] = None  # Base64 encoded
+    gradcam_image: Optional[str] = None
     top_contributing_features: List[str]
 
 
@@ -109,6 +200,16 @@ class HealthResponse(BaseModel):
     model_loaded: bool
     device: str
     version: str
+    environment: str
+    uptime_seconds: float
+    models_available: Dict[str, bool]
+
+
+class ModelInfoResponse(BaseModel):
+    """Model information response."""
+    models: Dict[str, Any]
+    last_trained: Optional[str]
+    training_metrics: Optional[Dict[str, Any]]
 
 
 # ============================================================================
@@ -116,109 +217,169 @@ class HealthResponse(BaseModel):
 # ============================================================================
 
 class ModelManager:
-    """Manages model loading and inference."""
+    """Manages model loading and inference for production."""
 
     def __init__(self):
         self.device = self._get_device()
         self.fusion_model = None
         self.tabular_model = None
+        self.qsvm_model = None
+        self.qnn_model = None
         self.face_preprocessor = FacePreprocessor()
-        self.tabular_preprocessor = TabularPreprocessor()
-        self.qml_model = None
+        self.tabular_preprocessor = None
         self.is_loaded = False
+        self.load_time = None
+        self.model_info = {}
+        self._start_time = time.time()
 
     def _get_device(self) -> torch.device:
         """Determine best available device."""
-        if torch.cuda.is_available():
+        if settings.device == "cuda" and torch.cuda.is_available():
             return torch.device('cuda')
-        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            return torch.device('mps')
+        elif settings.device == "auto":
+            if torch.cuda.is_available():
+                return torch.device('cuda')
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                return torch.device('mps')
         return torch.device('cpu')
 
-    def load_models(self, model_dir: str = "models"):
+    @property
+    def uptime(self) -> float:
+        return time.time() - self._start_time
+
+    def load_models(self, model_dir: Optional[str] = None):
         """Load trained models from disk."""
+        if model_dir is None:
+            model_dir = settings.paths.models_dir
+
         model_path = Path(model_dir)
+        logger.info(f"Loading models from {model_path}")
 
         try:
-            # Initialize fusion model
-            self.fusion_model = LateFusionClassifier(
-                face_embedding_dim=256,
-                tabular_embedding_dim=64,
-                tabular_input_dim=11
-            )
-            self.fusion_model = self.fusion_model.to(self.device)
-            self.fusion_model.eval()
+            # Load preprocessor
+            preprocessor_path = model_path / "preprocessor.joblib"
+            if preprocessor_path.exists():
+                self.tabular_preprocessor = joblib.load(preprocessor_path)
+                logger.info("Loaded preprocessor from disk")
+                self.model_info['preprocessor'] = True
+            else:
+                logger.warning("Preprocessor not found, creating new one")
+                self.tabular_preprocessor = TabularPreprocessor()
+                self._fit_preprocessor()
+                self.model_info['preprocessor'] = False
 
-            # Load weights if available
-            fusion_weights = model_path / "fusion_model.pt"
-            if fusion_weights.exists():
-                checkpoint = torch.load(fusion_weights, map_location=self.device)
-                self.fusion_model.load_state_dict(checkpoint['model_state_dict'])
-                logger.info("Loaded fusion model weights")
+            # Load classical models
+            classical_path = model_path / "classical_models.joblib"
+            if classical_path.exists():
+                self.tabular_model = joblib.load(classical_path)
+                logger.info("Loaded classical models from disk")
+                self.model_info['classical'] = True
+            else:
+                logger.warning("Classical models not found, training new ones")
+                self._fit_demo_models()
+                self.model_info['classical'] = False
 
-            # Initialize classical tabular models
-            self.tabular_model = ClassicalTabularModels(calibrate=True)
+            # Load QSVM model
+            qsvm_path = model_path / "qsvm.joblib"
+            if qsvm_path.exists():
+                self.qsvm_model = joblib.load(qsvm_path)
+                logger.info("Loaded QSVM model from disk")
+                self.model_info['qsvm'] = True
+            else:
+                self.model_info['qsvm'] = False
 
-            # Fit on synthetic data if no saved model (demo mode)
-            self._fit_demo_models()
+            # Load QNN model
+            qnn_path = model_path / "qnn.joblib"
+            if qnn_path.exists():
+                self.qnn_model = joblib.load(qnn_path)
+                logger.info("Loaded QNN model from disk")
+                self.model_info['qnn'] = True
+            else:
+                self.model_info['qnn'] = False
+
+            # Load fusion model
+            self._init_fusion_model(model_path)
+
+            # Load CNN model
+            cnn_path = model_path / "face_cnn.pt"
+            self.model_info['cnn'] = cnn_path.exists()
 
             self.is_loaded = True
+            self.load_time = datetime.now().isoformat()
             logger.info(f"Models loaded successfully on {self.device}")
 
         except Exception as e:
             logger.error(f"Error loading models: {e}")
             self._fit_demo_models()
             self.is_loaded = True
+            self.load_time = datetime.now().isoformat()
+
+    def _init_fusion_model(self, model_path: Path):
+        """Initialize fusion model."""
+        self.fusion_model = LateFusionClassifier(
+            face_embedding_dim=256,
+            tabular_embedding_dim=64,
+            tabular_input_dim=11
+        )
+        self.fusion_model = self.fusion_model.to(self.device)
+        self.fusion_model.eval()
+
+        fusion_weights = model_path / "fusion_model.pt"
+        if fusion_weights.exists():
+            checkpoint = torch.load(fusion_weights, map_location=self.device)
+            self.fusion_model.load_state_dict(checkpoint['model_state_dict'])
+            logger.info("Loaded fusion model weights")
+            self.model_info['fusion'] = True
+        else:
+            self.model_info['fusion'] = False
+
+    def _fit_preprocessor(self):
+        """Fit preprocessor on synthetic data."""
+        df = generate_hgps_tabular_data(n_hgps=50, n_controls=200)
+        self.tabular_preprocessor.fit(df)
 
     def _fit_demo_models(self):
         """Fit models on synthetic data for demo purposes."""
         logger.info("Fitting demo models on synthetic data...")
 
-        # Generate synthetic training data
         df = generate_hgps_tabular_data(n_hgps=50, n_controls=200)
 
-        # Fit tabular preprocessor
+        if self.tabular_preprocessor is None:
+            self.tabular_preprocessor = TabularPreprocessor()
         self.tabular_preprocessor.fit(df)
 
-        # Extract features and train classical models
         features = self.tabular_preprocessor.transform(df)
         labels = df['risk_label'].values
 
-        # Split for calibration
         split_idx = int(0.8 * len(features))
         X_train, X_val = features[:split_idx], features[split_idx:]
         y_train, y_val = labels[:split_idx], labels[split_idx:]
 
+        self.tabular_model = ClassicalTabularModels(calibrate=True)
         self.tabular_model.fit(X_train, y_train, X_val, y_val)
 
         logger.info("Demo models fitted")
 
     def preprocess_image(self, image_bytes: bytes) -> torch.Tensor:
         """Preprocess uploaded image for model input."""
-        # Decode image
         nparr = np.frombuffer(image_bytes, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
         if image is None:
             raise ValueError("Could not decode image")
 
-        # Detect and align face
         aligned = self.face_preprocessor.detect_and_align(image)
-
-        # Convert to tensor
         aligned_rgb = cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB)
         tensor = torch.from_numpy(aligned_rgb).float() / 255.0
-        tensor = tensor.permute(2, 0, 1).unsqueeze(0)  # BCHW
+        tensor = tensor.permute(2, 0, 1).unsqueeze(0)
 
         return tensor.to(self.device)
 
     def preprocess_clinical(self, data: ClinicalData) -> torch.Tensor:
         """Preprocess clinical data for model input."""
-        # Calculate derived features
         height_m = data.height_cm / 100
         bmi = data.weight_kg / (height_m ** 2) if height_m > 0 else 0
 
-        # Calculate z-scores (simplified)
         expected_height = 75 + data.age * 5.5
         expected_weight = 10 + data.age * 2.0
         height_z = (data.height_cm - expected_height) / 5
@@ -238,12 +399,29 @@ class ModelManager:
             data.lmna_mut
         ], dtype=np.float32).reshape(1, -1)
 
-        # Transform
         features_scaled = self.tabular_preprocessor.transform(
             pd.DataFrame(features, columns=self.tabular_preprocessor.feature_columns)
         )
 
         return torch.from_numpy(features_scaled).float().to(self.device)
+
+    def get_qml_features(self, clinical: ClinicalData) -> np.ndarray:
+        """Extract features for QML models."""
+        height_m = clinical.height_cm / 100
+        bmi = clinical.weight_kg / (height_m ** 2) if height_m > 0 else 0
+        expected_height = 75 + clinical.age * 5.5
+        height_z = (clinical.height_cm - expected_height) / 5
+
+        features = np.array([
+            clinical.age / 25.0,
+            height_z / 5.0 + 0.5,
+            bmi / 30.0,
+            clinical.small_jaw,
+            clinical.prominent_eyes,
+            clinical.lmna_mut
+        ], dtype=np.float32).reshape(1, -1)
+
+        return np.clip(features, 0, 1)
 
     @torch.no_grad()
     def predict_fusion(
@@ -253,13 +431,11 @@ class ModelManager:
     ) -> Dict[str, Any]:
         """Make prediction with fusion model."""
         self.fusion_model.eval()
-
         output = self.fusion_model.predict_proba(image_tensor, tabular_tensor)
 
         risk_probs = output['risk_probs'].cpu().numpy()[0]
         prog_probs = output['progression_probs'].cpu().numpy()[0]
-
-        risk_score = float(risk_probs[1])  # Probability of HGPS
+        risk_score = float(risk_probs[1])
 
         return {
             'risk_score': risk_score,
@@ -277,6 +453,36 @@ class ModelManager:
         return {
             'risk_score': float(probs[0, 1]) if probs.shape[1] > 1 else float(probs[0, 0]),
             'risk_probs': probs[0].tolist(),
+            'prediction': int(pred[0])
+        }
+
+    def predict_qsvm(self, features: np.ndarray) -> Dict[str, Any]:
+        """Make prediction with QSVM model."""
+        if self.qsvm_model is None:
+            raise ValueError("QSVM model not loaded")
+
+        pred = self.qsvm_model.predict(features)
+        probs = self.qsvm_model.predict_proba(features) if hasattr(self.qsvm_model, 'predict_proba') else None
+
+        risk_score = float(probs[0, 1]) if probs is not None else float(pred[0])
+
+        return {
+            'risk_score': risk_score,
+            'prediction': int(pred[0])
+        }
+
+    def predict_qnn(self, features: np.ndarray) -> Dict[str, Any]:
+        """Make prediction with QNN model."""
+        if self.qnn_model is None:
+            raise ValueError("QNN model not loaded")
+
+        pred = self.qnn_model.predict(features)
+        probs = self.qnn_model.predict_proba(features) if hasattr(self.qnn_model, 'predict_proba') else None
+
+        risk_score = float(probs[0, 1]) if probs is not None else float(pred[0])
+
+        return {
+            'risk_score': risk_score,
             'prediction': int(pred[0])
         }
 
@@ -325,7 +531,6 @@ def get_recommendation(risk_score: float, confidence: float) -> str:
 
 def compute_confidence(probs: np.ndarray) -> float:
     """Compute prediction confidence from probability distribution."""
-    # Higher when probability is closer to 0 or 1
     max_prob = np.max(probs)
     return float(2 * abs(max_prob - 0.5))
 
@@ -343,6 +548,7 @@ def encode_image_base64(image: np.ndarray) -> str:
 @app.on_event("startup")
 async def startup_event():
     """Load models on startup."""
+    logger.info("Starting HGPS API server...")
     model_manager.load_models()
 
 
@@ -351,6 +557,7 @@ async def root():
     """Root endpoint."""
     return {
         "message": "HGPS Multi-Modal AI API",
+        "version": "1.0.0",
         "docs": "/docs",
         "health": "/health"
     }
@@ -358,16 +565,29 @@ async def root():
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint with detailed status."""
     return HealthResponse(
         status="healthy" if model_manager.is_loaded else "initializing",
         model_loaded=model_manager.is_loaded,
         device=str(model_manager.device),
-        version="1.0.0"
+        version="1.0.0",
+        environment=settings.environment,
+        uptime_seconds=model_manager.uptime,
+        models_available=model_manager.model_info
     )
 
 
-@app.post("/predict", response_model=PredictionResponse)
+@app.get("/models", response_model=ModelInfoResponse, dependencies=[Depends(rate_limit)])
+async def get_model_info(api_key: str = Depends(verify_api_key)):
+    """Get information about loaded models."""
+    return ModelInfoResponse(
+        models=model_manager.model_info,
+        last_trained=model_manager.load_time,
+        training_metrics=None
+    )
+
+
+@app.post("/predict", response_model=PredictionResponse, dependencies=[Depends(rate_limit)])
 async def predict(
     image: UploadFile = File(..., description="Face image file"),
     age: float = Form(..., description="Patient age"),
@@ -377,7 +597,8 @@ async def predict(
     prominent_eyes: int = Form(0),
     thin_skin: int = Form(0),
     hair_loss: int = Form(0),
-    lmna_mut: int = Form(0)
+    lmna_mut: int = Form(0),
+    api_key: str = Depends(verify_api_key)
 ):
     """
     Main prediction endpoint.
@@ -388,11 +609,9 @@ async def predict(
         raise HTTPException(status_code=503, detail="Models not loaded")
 
     try:
-        # Read and preprocess image
         image_bytes = await image.read()
         image_tensor = model_manager.preprocess_image(image_bytes)
 
-        # Create clinical data
         clinical = ClinicalData(
             age=age,
             height_cm=height_cm,
@@ -405,7 +624,6 @@ async def predict(
         )
         tabular_tensor = model_manager.preprocess_clinical(clinical)
 
-        # Get prediction
         result = model_manager.predict_fusion(image_tensor, tabular_tensor)
 
         risk_score = result['risk_score']
@@ -433,8 +651,11 @@ async def predict(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/predict/tabular", response_model=PredictionResponse)
-async def predict_tabular_only(clinical: ClinicalData):
+@app.post("/predict/tabular", response_model=PredictionResponse, dependencies=[Depends(rate_limit)])
+async def predict_tabular_only(
+    clinical: ClinicalData,
+    api_key: str = Depends(verify_api_key)
+):
     """
     Tabular-only prediction endpoint.
 
@@ -455,7 +676,7 @@ async def predict_tabular_only(clinical: ClinicalData):
         return PredictionResponse(
             risk_score=risk_score,
             risk_class=risk_class,
-            progression_class="Unknown",  # Not available without full model
+            progression_class="Unknown",
             progression_probs={"Slow": 0.33, "Moderate": 0.34, "Rapid": 0.33},
             confidence=confidence,
             recommendation=recommendation,
@@ -467,8 +688,11 @@ async def predict_tabular_only(clinical: ClinicalData):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/predict/qml", response_model=QMLComparisonResponse)
-async def predict_qml_comparison(clinical: ClinicalData):
+@app.post("/predict/qml", response_model=QMLComparisonResponse, dependencies=[Depends(rate_limit)])
+async def predict_qml_comparison(
+    clinical: ClinicalData,
+    api_key: str = Depends(verify_api_key)
+):
     """
     QML comparison endpoint.
 
@@ -479,6 +703,7 @@ async def predict_qml_comparison(clinical: ClinicalData):
 
     try:
         tabular_tensor = model_manager.preprocess_clinical(clinical)
+        qml_features = model_manager.get_qml_features(clinical)
 
         # Classical prediction
         classical_result = model_manager.predict_tabular(tabular_tensor)
@@ -491,28 +716,27 @@ async def predict_qml_comparison(clinical: ClinicalData):
             progression_probs={"Slow": 0.33, "Moderate": 0.34, "Rapid": 0.33},
             confidence=compute_confidence(np.array(classical_result['risk_probs'])),
             recommendation=get_recommendation(classical_risk, 0.7),
-            model_type="classical_svm"
+            model_type="classical_xgboost"
         )
 
-        # Try quantum prediction if available
+        # Quantum prediction
         quantum_response = None
-        try:
-            from .qml import QuantumSVM
-            # Note: In production, QML model would be pre-trained
-            # For demo, we return a simulated result
-            quantum_risk = classical_risk * 0.95 + 0.025  # Slight variation
+        if model_manager.qsvm_model is not None:
+            try:
+                qsvm_result = model_manager.predict_qsvm(qml_features)
+                quantum_risk = qsvm_result['risk_score']
 
-            quantum_response = PredictionResponse(
-                risk_score=quantum_risk,
-                risk_class=get_risk_class(quantum_risk),
-                progression_class="Unknown",
-                progression_probs={"Slow": 0.33, "Moderate": 0.34, "Rapid": 0.33},
-                confidence=compute_confidence(np.array([1 - quantum_risk, quantum_risk])),
-                recommendation=get_recommendation(quantum_risk, 0.7),
-                model_type="quantum_svm"
-            )
-        except ImportError:
-            pass
+                quantum_response = PredictionResponse(
+                    risk_score=quantum_risk,
+                    risk_class=get_risk_class(quantum_risk),
+                    progression_class="Unknown",
+                    progression_probs={"Slow": 0.33, "Moderate": 0.34, "Rapid": 0.33},
+                    confidence=compute_confidence(np.array([1 - quantum_risk, quantum_risk])),
+                    recommendation=get_recommendation(quantum_risk, 0.7),
+                    model_type="quantum_svm"
+                )
+            except Exception as e:
+                logger.warning(f"QSVM prediction failed: {e}")
 
         # Generate comparison summary
         if quantum_response:
@@ -537,8 +761,11 @@ async def predict_qml_comparison(clinical: ClinicalData):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/explain", response_model=ExplanationResponse)
-async def get_explanation(clinical: ClinicalData):
+@app.post("/explain", response_model=ExplanationResponse, dependencies=[Depends(rate_limit)])
+async def get_explanation(
+    clinical: ClinicalData,
+    api_key: str = Depends(verify_api_key)
+):
     """
     Model explanation endpoint.
 
@@ -548,14 +775,12 @@ async def get_explanation(clinical: ClinicalData):
         raise HTTPException(status_code=503, detail="Models not loaded")
 
     try:
-        # Get feature importance from random forest
         importance = model_manager.tabular_model.get_feature_importance('random_forest')
 
         if importance is not None:
             feature_names = model_manager.tabular_preprocessor.feature_columns
             importance_dict = dict(zip(feature_names, importance.tolist()))
 
-            # Sort and get top features
             sorted_features = sorted(
                 importance_dict.items(),
                 key=lambda x: abs(x[1]),
@@ -568,8 +793,8 @@ async def get_explanation(clinical: ClinicalData):
 
         return ExplanationResponse(
             feature_importance=importance_dict,
-            shap_values=None,  # Would require SHAP computation
-            gradcam_image=None,  # Would require image processing
+            shap_values=None,
+            gradcam_image=None,
             top_contributing_features=top_features
         )
 
@@ -578,8 +803,12 @@ async def get_explanation(clinical: ClinicalData):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/growth-curve/{patient_age}")
-async def get_growth_curve(patient_age: float, is_hgps: bool = False):
+@app.get("/growth-curve/{patient_age}", dependencies=[Depends(rate_limit)])
+async def get_growth_curve(
+    patient_age: float,
+    is_hgps: bool = False,
+    api_key: str = Depends(verify_api_key)
+):
     """
     Generate predicted growth curve data.
 
@@ -588,17 +817,15 @@ async def get_growth_curve(patient_age: float, is_hgps: bool = False):
     ages = np.linspace(0, 15, 50)
 
     if is_hgps:
-        # HGPS growth trajectory (severely reduced)
-        heights = 50 + ages * 4.5  # Much slower growth
+        heights = 50 + ages * 4.5
         weights = 3 + ages * 1.2
     else:
-        # Normal growth trajectory
         heights = 50 + ages * 5.5
         weights = 3.5 + ages * 2.0
 
-    # Add some variability
-    heights += np.random.randn(len(ages)) * 2
-    weights += np.random.randn(len(ages)) * 0.5
+    np.random.seed(42)
+    heights = heights + np.random.randn(len(ages)) * 2
+    weights = weights + np.random.randn(len(ages)) * 0.5
 
     return {
         "ages": ages.tolist(),
@@ -610,11 +837,40 @@ async def get_growth_curve(patient_age: float, is_hgps: bool = False):
 
 
 # ============================================================================
+# ERROR HANDLERS
+# ============================================================================
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "status_code": exc.status_code,
+            "timestamp": datetime.now().isoformat()
+        }
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "status_code": 500,
+            "timestamp": datetime.now().isoformat()
+        }
+    )
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
-# Import pandas for preprocessing (delayed to avoid circular import)
 import pandas as pd
+
 
 def run_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = False):
     """Run the FastAPI server."""

@@ -170,27 +170,76 @@ Visit `http://localhost:8501` for the web interface.
 
 ---
 
-## Docker Deployment
+## Production Deployment
 
-### Build and run all services:
+### Quick Start (Docker)
 
 ```bash
+# Build and run all services
 docker-compose up --build
+
+# Or run specific services
+docker-compose up api dashboard
 ```
 
 Services:
-- **API**: http://localhost:8000
+- **API**: http://localhost:8000 (with OpenAPI docs at /docs)
 - **Dashboard**: http://localhost:8501
-- **Jupyter**: http://localhost:8888
 
-### Individual services:
+### Train Models First
 
 ```bash
-# API only
-docker-compose up api
+# Train all models before deployment
+python -m src.train --all
 
-# Dashboard only
-docker-compose up dashboard
+# Or use Docker
+docker-compose --profile training run trainer
+```
+
+### Environment Configuration
+
+Copy `.env.example` to `.env` and configure:
+
+```bash
+cp .env.example .env
+```
+
+Key settings:
+```env
+ENVIRONMENT=production
+API_KEY=your-secure-api-key
+LOG_LEVEL=INFO
+DEVICE=auto
+```
+
+### Production with Nginx (Full Stack)
+
+```bash
+docker-compose --profile production-full up
+```
+
+This includes:
+- API server (4 workers)
+- Streamlit dashboard
+- Redis for rate limiting
+- Nginx reverse proxy
+
+### API Authentication
+
+Include API key in requests when enabled:
+
+```bash
+curl -H "X-API-Key: your-api-key" http://localhost:8000/predict/tabular ...
+```
+
+### Health Monitoring
+
+```bash
+# Check API health
+curl http://localhost:8000/health
+
+# Check loaded models
+curl http://localhost:8000/models
 ```
 
 ---

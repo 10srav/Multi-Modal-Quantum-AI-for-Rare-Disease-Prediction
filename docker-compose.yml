@@ -1,57 +1,166 @@
 version: '3.8'
 
 services:
-  # FastAPI Backend
+  # ==========================================================================
+  # Production API Service
+  # ==========================================================================
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: hgps-ai-api:latest
     container_name: hgps-api
     ports:
-      - "8000:8000"
-    volumes:
-      - ./data:/app/data
-      - ./models:/app/models
+      - "${API_PORT:-8000}:8000"
     environment:
-      - PYTHONPATH=/app
-    command: uvicorn src.api:app --host 0.0.0.0 --port 8000 --reload
+      - ENVIRONMENT=production
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - API_KEY=${API_KEY:-}
+      - DEVICE=${DEVICE:-auto}
+    volumes:
+      - ./models:/app/models:ro
+      - ./data:/app/data:ro
+      - ./logs:/app/logs
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
 
-  # Streamlit Dashboard
+  # ==========================================================================
+  # Streamlit Dashboard Service
+  # ==========================================================================
   dashboard:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: hgps-ai-dashboard:latest
     container_name: hgps-dashboard
     ports:
-      - "8501:8501"
-    volumes:
-      - ./data:/app/data
-      - ./models:/app/models
+      - "${DASHBOARD_PORT:-8501}:8501"
     environment:
-      - PYTHONPATH=/app
-    command: streamlit run src/dashboard.py --server.port 8501 --server.address 0.0.0.0
+      - ENVIRONMENT=production
+      - API_URL=http://api:8000
+    volumes:
+      - ./models:/app/models:ro
+      - ./data:/app/data:ro
+    command: ["python", "-m", "streamlit", "run", "src/dashboard.py",
+              "--server.port=8501",
+              "--server.address=0.0.0.0",
+              "--server.headless=true"]
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ==========================================================================
+  # Development Services (optional)
+  # ==========================================================================
+  api-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    image: hgps-ai-api:dev
+    container_name: hgps-api-dev
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+      - DEBUG=true
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./models:/app/models
+      - ./data:/app/data
+      - ./logs:/app/logs
+    profiles:
+      - development
+    restart: unless-stopped
+
+  # ==========================================================================
+  # Training Service (one-off job)
+  # ==========================================================================
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    image: hgps-ai-trainer:latest
+    container_name: hgps-trainer
+    environment:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./models:/app/models
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./results:/app/results
+    command: ["python", "-m", "src.train", "--all"]
+    profiles:
+      - training
+    deploy:
+      resources:
+        limits:
+          cpus: '8'
+          memory: 16G
+
+  # ==========================================================================
+  # Redis for Production Rate Limiting (optional)
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: hgps-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    profiles:
+      - production-full
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ==========================================================================
+  # Nginx Reverse Proxy (optional for production)
+  # ==========================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: hgps-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
     depends_on:
       - api
-
-  # Jupyter Notebook (for experiments)
-  notebook:
-    build: .
-    container_name: hgps-notebook
-    ports:
-      - "8888:8888"
-    volumes:
-      - ./notebooks:/app/notebooks
-      - ./data:/app/data
-      - ./models:/app/models
-      - ./results:/app/results
-      - ./figures:/app/figures
-    environment:
-      - PYTHONPATH=/app
-    command: jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=''
+      - dashboard
+    profiles:
+      - production-full
+    restart: unless-stopped
 
 volumes:
-  data:
-  models:
-  results:
-  figures:
+  redis_data:
+
+networks:
+  default:
+    name: hgps-network
+    driver: bridge
