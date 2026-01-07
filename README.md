@@ -39,6 +39,7 @@
 - [Project Structure](#project-structure)
 - [Testing](#testing)
 - [UN SDG Alignment](#un-sustainable-development-goals-alignment)
+- [Ethical Data Guidelines](#ethical-data-guidelines)
 - [Limitations & Disclaimer](#limitations--disclaimer)
 - [Contributing](#contributing)
 - [License](#license)
@@ -541,6 +542,28 @@ open htmlcov/index.html
 
 ---
 
+## Ethical Data Guidelines
+
+> **Important:** This project follows strict ethical guidelines for medical AI development.
+
+### Current Data Sources
+| Data Type | Source | Status |
+|-----------|--------|--------|
+| Control Face Images | [UTKFace Dataset](https://susanqq.github.io/UTKFace/) | ✅ Licensed for research |
+| Clinical Features | Synthetic (literature-based) | ✅ Simulated |
+| HGPS Patient Images | NOT included | ⚠️ Requires ethical partnership |
+
+### For Production Deployment with Real HGPS Data
+Real HGPS patient images require:
+- Partnership with [Progeria Research Foundation](https://www.progeriaresearch.org/)
+- IRB/Ethics Board approval
+- Patient/guardian informed consent
+- HIPAA/GDPR compliance
+
+See [docs/ETHICAL_DATA_GUIDELINES.md](docs/ETHICAL_DATA_GUIDELINES.md) for complete guidelines.
+
+---
+
 ## Limitations & Disclaimer
 
 > **IMPORTANT: This is a research and educational project.**
@@ -550,6 +573,7 @@ open htmlcov/index.html
 - **Quantum Simulation**: QML models run on classical simulators, not quantum hardware
 - **Limited Data**: Trained on 50 images; larger datasets needed for production
 - **Research Only**: Performance metrics are on synthetic benchmarks
+- **No Real HGPS Images**: Control images only; HGPS features are simulated
 
 **Always consult qualified healthcare professionals for medical decisions.**
 
