@@ -1,0 +1,63 @@
+{
+  "timestamp": "2026-01-07T16:09:34.475448",
+  "note": "LOCAL DEMO ONLY - Synthetic HGPS images used",
+  "dataset": {
+    "total_samples": 50,
+    "control_samples": 35,
+    "hgps_samples": 15,
+    "train_samples": 35,
+    "val_samples": 7,
+    "test_samples": 8,
+    "hgps_source": "synthetic (generated from control images)"
+  },
+  "results": {
+    "classical_ml": {
+      "svm_rbf": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "auc": 1.0
+      },
+      "svm_linear": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "auc": 1.0
+      },
+      "random_forest": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "auc": 1.0
+      },
+      "logistic": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "auc": 1.0
+      },
+      "gradient_boosting": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "auc": 1.0
+      },
+      "xgboost": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "auc": 1.0
+      }
+    },
+    "cnn_test_accuracy": 62.5,
+    "cnn_test_f1": 0.6454545454545454,
+    "qsvm_test_accuracy": 87.5,
+    "qnn_test_accuracy": 87.5
+  }
+}
