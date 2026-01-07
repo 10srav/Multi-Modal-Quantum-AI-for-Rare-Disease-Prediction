@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  # FastAPI Backend
+  api:
+    build: .
+    container_name: hgps-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    environment:
+      - PYTHONPATH=/app
+    command: uvicorn src.api:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Streamlit Dashboard
+  dashboard:
+    build: .
+    container_name: hgps-dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    environment:
+      - PYTHONPATH=/app
+    command: streamlit run src/dashboard.py --server.port 8501 --server.address 0.0.0.0
+    depends_on:
+      - api
+
+  # Jupyter Notebook (for experiments)
+  notebook:
+    build: .
+    container_name: hgps-notebook
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/app/notebooks
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./results:/app/results
+      - ./figures:/app/figures
+    environment:
+      - PYTHONPATH=/app
+    command: jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=''
+
+volumes:
+  data:
+  models:
+  results:
+  figures:
