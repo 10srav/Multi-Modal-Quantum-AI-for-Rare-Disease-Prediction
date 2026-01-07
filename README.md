@@ -12,11 +12,16 @@
   <strong>A production-ready AI system combining Classical Machine Learning with Quantum Machine Learning for Hutchinson-Gilford Progeria Syndrome (HGPS) risk prediction.</strong>
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/dashboard_main.png" alt="HGPS Risk Assessment Dashboard" width="800">
+</p>
+
 ---
 
 ## Table of Contents
 
 - [Overview](#overview)
+- [Screenshots](#screenshots)
 - [Key Features](#key-features)
 - [Architecture](#architecture)
 - [Model Performance](#model-performance)
@@ -45,6 +50,38 @@ Hutchinson-Gilford Progeria Syndrome (HGPS) is an extremely rare genetic disorde
 - **Multi-modal Fusion**: Combining image and tabular data for enhanced predictions
 
 The system provides risk assessment, disease progression prediction, and growth curve analysis with explainable AI capabilities.
+
+---
+
+## Screenshots
+
+### Clinical Dashboard
+<p align="center">
+  <img src="docs/screenshots/dashboard_main.png" alt="Dashboard - Main Interface" width="800">
+  <br>
+  <em>Main dashboard interface with patient information input, clinical data entry, and phenotypic feature selection</em>
+</p>
+
+### Clinical Data Input
+<p align="center">
+  <img src="docs/screenshots/dashboard_clinical.png" alt="Dashboard - Clinical Data" width="800">
+  <br>
+  <em>Detailed clinical data entry with BMI calculation and HGPS-specific phenotypic markers</em>
+</p>
+
+### API Documentation
+<p align="center">
+  <img src="docs/screenshots/api_docs.png" alt="API Documentation" width="800">
+  <br>
+  <em>Interactive FastAPI documentation with all available endpoints</em>
+</p>
+
+### API Endpoint Details
+<p align="center">
+  <img src="docs/screenshots/api_endpoint.png" alt="API Endpoint" width="800">
+  <br>
+  <em>Detailed endpoint documentation with request/response schemas</em>
+</p>
 
 ---
 
@@ -246,6 +283,10 @@ python retrain_with_real_images.py
 
 ## API Reference
 
+<p align="center">
+  <img src="docs/screenshots/api_docs.png" alt="API Documentation" width="800">
+</p>
+
 ### Endpoints
 
 | Endpoint | Method | Description |
@@ -302,6 +343,14 @@ curl -H "X-API-Key: your-api-key" http://localhost:8000/predict/tabular ...
 ## Dashboard
 
 The Streamlit dashboard provides an intuitive clinical interface:
+
+<p align="center">
+  <img src="docs/screenshots/dashboard_main.png" alt="Dashboard Main View" width="800">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/dashboard_clinical.png" alt="Dashboard Clinical Input" width="800">
+</p>
 
 ### Features
 
