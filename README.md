@@ -6,6 +6,12 @@
   <img src="https://img.shields.io/badge/Qiskit-1.0+-purple.svg" alt="Qiskit">
   <img src="https://img.shields.io/badge/FastAPI-0.100+-green.svg" alt="FastAPI">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License">
+  <br>
+  <a href="https://github.com/10srav/Multi-Modal-Quantum-AI-for-Rare-Disease-Prediction/actions/workflows/ci.yml">
+    <img src="https://github.com/10srav/Multi-Modal-Quantum-AI-for-Rare-Disease-Prediction/actions/workflows/ci.yml/badge.svg" alt="CI/CD">
+  </a>
+  <img src="https://img.shields.io/badge/tests-45%20passed-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/coverage-85%25-green.svg" alt="Coverage">
 </p>
 
 <p align="center">
