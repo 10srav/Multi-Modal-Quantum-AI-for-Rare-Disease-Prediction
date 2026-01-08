@@ -102,6 +102,7 @@ The system provides risk assessment, disease progression prediction, and growth 
 | **Interactive Dashboard** | Streamlit-based clinical interface |
 | **Explainable AI** | SHAP-based feature importance explanations |
 | **Growth Curve Analysis** | WHO-based growth trajectory predictions |
+| **Downloadable Reports** | Export assessments as Text or CSV files |
 | **Docker Support** | Multi-stage production builds with Nginx |
 | **Comprehensive Testing** | 45+ unit and integration tests |
 
@@ -367,7 +368,8 @@ The Streamlit dashboard provides an intuitive clinical interface:
    - Image upload capability
 
 2. **Prediction Results**
-   - Risk score visualization
+   - Risk score visualization (gauge chart)
+   - Disease progression prediction (Slow/Moderate/Rapid)
    - Confidence intervals
    - Model comparison (Classical vs Quantum)
 
@@ -380,6 +382,11 @@ The Streamlit dashboard provides an intuitive clinical interface:
    - WHO-based percentile curves
    - HGPS-specific trajectories
    - Predicted growth patterns
+
+5. **Downloadable Reports**
+   - Text report with full assessment details
+   - CSV data export for records and analysis
+   - Includes patient info, risk scores, recommendations
 
 ### Running the Dashboard
 
