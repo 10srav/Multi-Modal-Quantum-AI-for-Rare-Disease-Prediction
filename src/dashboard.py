@@ -186,6 +186,118 @@ def get_recommendation(risk_score, confidence):
         return "🚨 High risk indicated. Genetic testing and specialist consultation recommended."
 
 
+def get_decision_support(risk_score, confidence, height_z, weight_z, phenotype_count):
+    """
+    Generate structured decision support recommendations.
+
+    Returns a dict with:
+    - primary_action: Main recommended action category
+    - actions: List of specific action items
+    - urgency: 'routine', 'elevated', 'urgent'
+    """
+    actions = []
+    phenotype_flags = phenotype_count >= 3
+
+    # Determine urgency level and primary action
+    if risk_score < 0.3 and abs(height_z) < 2 and abs(weight_z) < 2:
+        urgency = 'routine'
+        primary_action = 'MONITOR'
+        actions = [
+            {'icon': '📋', 'text': 'Continue routine pediatric check-ups', 'priority': 'standard'},
+            {'icon': '📏', 'text': 'Monitor growth at regular intervals', 'priority': 'standard'},
+            {'icon': '📅', 'text': 'Schedule follow-up in 6-12 months', 'priority': 'standard'},
+        ]
+
+    elif risk_score < 0.5 or (risk_score < 0.7 and confidence < 0.6):
+        urgency = 'elevated'
+        primary_action = 'GENETIC_TESTING'
+        actions = [
+            {'icon': '🧬', 'text': 'Consider LMNA gene sequencing', 'priority': 'recommended'},
+            {'icon': '👨‍⚕️', 'text': 'Schedule genetics consultation', 'priority': 'recommended'},
+            {'icon': '📏', 'text': 'Increase growth monitoring frequency', 'priority': 'standard'},
+            {'icon': '🫀', 'text': 'Baseline cardiovascular assessment', 'priority': 'recommended'},
+        ]
+
+    elif risk_score < 0.7:
+        urgency = 'elevated'
+        primary_action = 'GENETIC_TESTING'
+        actions = [
+            {'icon': '🧬', 'text': 'LMNA mutation testing recommended', 'priority': 'high'},
+            {'icon': '👨‍⚕️', 'text': 'Refer to progeria specialist', 'priority': 'high'},
+            {'icon': '🫀', 'text': 'Cardiac evaluation (echocardiogram)', 'priority': 'recommended'},
+            {'icon': '🦴', 'text': 'Bone density assessment', 'priority': 'recommended'},
+            {'icon': '📅', 'text': 'Monthly growth monitoring', 'priority': 'standard'},
+        ]
+
+    else:
+        urgency = 'urgent'
+        primary_action = 'URGENT_REVIEW'
+        actions = [
+            {'icon': '🚨', 'text': 'URGENT: Immediate specialist referral', 'priority': 'critical'},
+            {'icon': '🧬', 'text': 'Expedited genetic testing (LMNA)', 'priority': 'critical'},
+            {'icon': '🫀', 'text': 'Comprehensive cardiac workup', 'priority': 'critical'},
+            {'icon': '👨‍⚕️', 'text': 'Multi-disciplinary team review', 'priority': 'high'},
+            {'icon': '💊', 'text': 'Discuss treatment options (e.g., lonafarnib)', 'priority': 'high'},
+            {'icon': '🏥', 'text': 'Connect with PRF (Progeria Research Foundation)', 'priority': 'recommended'},
+        ]
+
+    # Add phenotype-based recommendations
+    if phenotype_flags and urgency == 'routine':
+        actions.append({'icon': '👁️', 'text': 'Phenotypic features warrant closer observation', 'priority': 'recommended'})
+
+    if abs(height_z) >= 2 or abs(weight_z) >= 2:
+        actions.append({'icon': '📊', 'text': 'Growth parameters significantly deviated - investigate cause', 'priority': 'high'})
+
+    return {
+        'primary_action': primary_action,
+        'urgency': urgency,
+        'actions': actions
+    }
+
+
+def create_confidence_gauge(confidence):
+    """Create a gauge chart for model confidence visualization."""
+    # Determine color based on confidence level
+    if confidence >= 0.8:
+        bar_color = "#2ca02c"  # Green - High confidence
+    elif confidence >= 0.6:
+        bar_color = "#1f77b4"  # Blue - Moderate confidence
+    else:
+        bar_color = "#ff7f0e"  # Orange - Low confidence
+
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=confidence * 100,
+        number={'suffix': '%', 'font': {'size': 24}},
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={'text': "Model Confidence", 'font': {'size': 16}},
+        gauge={
+            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "darkgray"},
+            'bar': {'color': bar_color, 'thickness': 0.75},
+            'bgcolor': "white",
+            'borderwidth': 2,
+            'bordercolor': "gray",
+            'steps': [
+                {'range': [0, 60], 'color': '#ffebee'},
+                {'range': [60, 80], 'color': '#e3f2fd'},
+                {'range': [80, 100], 'color': '#e8f5e9'}
+            ],
+            'threshold': {
+                'line': {'color': "darkblue", 'width': 3},
+                'thickness': 0.8,
+                'value': confidence * 100
+            }
+        }
+    ))
+
+    fig.update_layout(
+        height=200,
+        margin=dict(l=20, r=20, t=40, b=10)
+    )
+
+    return fig
+
+
 # ============================================================================
 # VISUALIZATION FUNCTIONS
 # ============================================================================
@@ -238,6 +350,122 @@ def create_progression_chart(probs):
         yaxis_range=[0, 1],
         height=300,
         margin=dict(l=20, r=20, t=50, b=20)
+    )
+
+    return fig
+
+
+def create_progression_timeline(current_age, risk_score, progression_type='moderate'):
+    """
+    Create a disease progression timeline showing expected trajectory.
+
+    Args:
+        current_age: Patient's current age
+        risk_score: Risk score (0-1)
+        progression_type: 'slow', 'moderate', or 'rapid'
+    """
+    # Define progression parameters based on type
+    progression_params = {
+        'slow': {'severity_rate': 0.03, 'color': '#2ca02c', 'label': 'Slow Progression'},
+        'moderate': {'severity_rate': 0.06, 'color': '#ff7f0e', 'label': 'Moderate Progression'},
+        'rapid': {'severity_rate': 0.10, 'color': '#d62728', 'label': 'Rapid Progression'}
+    }
+
+    params = progression_params.get(progression_type, progression_params['moderate'])
+
+    # Timeline from birth to 20 years
+    ages = np.linspace(0, 20, 100)
+
+    # Calculate severity curves (sigmoid-like progression)
+    def severity_curve(age, rate):
+        return 1 / (1 + np.exp(-rate * (age - 5)))
+
+    slow_severity = severity_curve(ages, 0.3) * 100
+    moderate_severity = severity_curve(ages, 0.5) * 100
+    rapid_severity = severity_curve(ages, 0.8) * 100
+
+    # Determine patient's current position
+    current_severity = risk_score * 100
+
+    fig = go.Figure()
+
+    # Add reference trajectories
+    fig.add_trace(go.Scatter(
+        x=ages, y=slow_severity,
+        name='Slow Progression',
+        line=dict(color='#2ca02c', dash='dot', width=2),
+        hovertemplate='Age: %{x:.1f}<br>Severity: %{y:.1f}%<extra></extra>'
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=ages, y=moderate_severity,
+        name='Moderate Progression',
+        line=dict(color='#ff7f0e', dash='dash', width=2),
+        hovertemplate='Age: %{x:.1f}<br>Severity: %{y:.1f}%<extra></extra>'
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=ages, y=rapid_severity,
+        name='Rapid Progression',
+        line=dict(color='#d62728', width=2),
+        hovertemplate='Age: %{x:.1f}<br>Severity: %{y:.1f}%<extra></extra>'
+    ))
+
+    # Patient's current position
+    fig.add_trace(go.Scatter(
+        x=[current_age],
+        y=[current_severity],
+        mode='markers',
+        name='Current Status',
+        marker=dict(size=18, color='#1f77b4', symbol='star', line=dict(width=2, color='white')),
+        hovertemplate=f'Patient (Age {current_age})<br>Risk: {current_severity:.1f}%<extra></extra>'
+    ))
+
+    # Add milestone markers
+    milestones = [
+        {'age': 5, 'label': 'Early Childhood', 'y': 105},
+        {'age': 10, 'label': 'Mid Childhood', 'y': 105},
+        {'age': 15, 'label': 'Adolescence', 'y': 105},
+    ]
+
+    for m in milestones:
+        fig.add_vline(x=m['age'], line_dash="dot", line_color="gray", opacity=0.5)
+        fig.add_annotation(
+            x=m['age'], y=m['y'],
+            text=m['label'],
+            showarrow=False,
+            font=dict(size=9, color='gray')
+        )
+
+    # Add severity zones
+    fig.add_hrect(y0=0, y1=30, fillcolor="green", opacity=0.1, line_width=0)
+    fig.add_hrect(y0=30, y1=70, fillcolor="orange", opacity=0.1, line_width=0)
+    fig.add_hrect(y0=70, y1=100, fillcolor="red", opacity=0.1, line_width=0)
+
+    # Zone labels
+    fig.add_annotation(x=19, y=15, text="Low Risk Zone", showarrow=False,
+                       font=dict(size=10, color='#2ca02c'))
+    fig.add_annotation(x=19, y=50, text="Moderate Risk", showarrow=False,
+                       font=dict(size=10, color='#ff7f0e'))
+    fig.add_annotation(x=19, y=85, text="High Risk Zone", showarrow=False,
+                       font=dict(size=10, color='#d62728'))
+
+    fig.update_layout(
+        title='Disease Progression Timeline',
+        xaxis_title='Age (years)',
+        yaxis_title='Disease Severity (%)',
+        yaxis_range=[0, 110],
+        xaxis_range=[0, 20],
+        height=400,
+        margin=dict(l=20, r=20, t=50, b=20),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        hovermode='closest'
     )
 
     return fig
@@ -347,6 +575,26 @@ def generate_report(clinical_data, result, quantum_score):
     """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # Calculate decision support
+    phenotype_count = sum([
+        clinical_data['small_jaw'],
+        clinical_data['prominent_eyes'],
+        clinical_data['thin_skin'],
+        clinical_data['hair_loss'],
+        clinical_data['lmna_mut']
+    ])
+
+    decision = get_decision_support(
+        result['risk_score'],
+        result['confidence'],
+        result['height_z'],
+        result['weight_z'],
+        phenotype_count
+    )
+
+    # Format action items
+    action_items = "\n".join([f"  [{a['priority'].upper()}] {a['text']}" for a in decision['actions']])
+
     report = f"""
 ================================================================================
               HGPS RISK ASSESSMENT REPORT
@@ -382,6 +630,16 @@ Model Confidence:       {result['confidence']:.1%}
 Growth Analysis:
   - Height Z-Score:     {result['height_z']:.2f} ({'Normal' if abs(result['height_z']) < 2 else 'ABNORMAL'})
   - Weight Z-Score:     {result['weight_z']:.2f} ({'Normal' if abs(result['weight_z']) < 2 else 'ABNORMAL'})
+
+--------------------------------------------------------------------------------
+                      DECISION SUPPORT
+--------------------------------------------------------------------------------
+
+PRIMARY RECOMMENDATION: {decision['primary_action'].replace('_', ' ')}
+URGENCY LEVEL:          {decision['urgency'].upper()}
+
+Action Items:
+{action_items}
 
 --------------------------------------------------------------------------------
                       ML MODEL COMPARISON
@@ -422,6 +680,23 @@ def generate_csv_report(clinical_data, result, quantum_score):
     """Generate a CSV format report for data export."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # Calculate decision support
+    phenotype_count = sum([
+        clinical_data['small_jaw'],
+        clinical_data['prominent_eyes'],
+        clinical_data['thin_skin'],
+        clinical_data['hair_loss'],
+        clinical_data['lmna_mut']
+    ])
+
+    decision = get_decision_support(
+        result['risk_score'],
+        result['confidence'],
+        result['height_z'],
+        result['weight_z'],
+        phenotype_count
+    )
+
     data = {
         'Report_Timestamp': [timestamp],
         'Age_Years': [clinical_data['age']],
@@ -440,6 +715,8 @@ def generate_csv_report(clinical_data, result, quantum_score):
         'Weight_Z_Score': [result['weight_z']],
         'Classical_ML_Score': [result['risk_score']],
         'Quantum_ML_Score': [quantum_score],
+        'Primary_Recommendation': [decision['primary_action']],
+        'Urgency_Level': [decision['urgency']],
     }
 
     df = pd.DataFrame(data)
@@ -494,17 +771,61 @@ def main():
     # Sidebar - Input
     st.sidebar.header("📋 Patient Information")
 
-    # Image upload
+    # Image upload with Camera option
     st.sidebar.subheader("Face Image")
-    uploaded_file = st.sidebar.file_uploader(
-        "Upload face photo",
-        type=['jpg', 'jpeg', 'png'],
-        help="Upload a frontal face photograph for analysis"
+
+    image_source = st.sidebar.radio(
+        "Image Source",
+        ["Upload", "Camera"],
+        horizontal=True,
+        help="Choose to upload an image or capture from camera"
     )
 
-    if uploaded_file is not None:
-        image = Image.open(uploaded_file)
-        st.sidebar.image(image, caption="Uploaded Image", use_container_width=True)
+    uploaded_file = None
+    camera_image = None
+
+    if image_source == "Upload":
+        uploaded_file = st.sidebar.file_uploader(
+            "Upload face photo",
+            type=['jpg', 'jpeg', 'png'],
+            help="Upload a frontal face photograph for analysis"
+        )
+        if uploaded_file is not None:
+            image = Image.open(uploaded_file)
+            st.sidebar.image(image, caption="Uploaded Image", use_container_width=True)
+    else:
+        camera_image = st.sidebar.camera_input(
+            "Capture face photo",
+            help="Take a frontal face photograph for analysis"
+        )
+        if camera_image is not None:
+            image = Image.open(camera_image)
+            st.sidebar.image(image, caption="Captured Image", use_container_width=True)
+
+    # Combined image reference
+    face_image = uploaded_file or camera_image
+
+    # Face alignment feedback
+    if face_image is not None:
+        try:
+            # Attempt face preprocessing
+            img_bytes = face_image.getvalue()
+            img_array = np.frombuffer(img_bytes, np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
+            if img is not None:
+                # Basic face detection check with OpenCV
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+                faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+                if len(faces) > 0:
+                    st.sidebar.success(f"Face detected and aligned ({len(faces)} face{'s' if len(faces) > 1 else ''} found)")
+                    x, y, w, h = faces[0]
+                    st.sidebar.caption(f"Face region: {w}x{h}px at position ({x}, {y})")
+                else:
+                    st.sidebar.warning("No face detected - ensure frontal face is visible")
+        except Exception as e:
+            st.sidebar.info("Image uploaded - face analysis will run on analyze")
 
     # Clinical data inputs
     st.sidebar.subheader("Clinical Data")
@@ -577,16 +898,10 @@ def main():
                     delta="Normal" if abs(result['weight_z']) < 2 else "Abnormal"
                 )
 
-            with col4:
-                st.metric(
-                    "Model Confidence",
-                    f"{result['confidence']:.1%}"
-                )
-
             st.markdown("---")
 
-            # Visualization row
-            col1, col2 = st.columns(2)
+            # Visualization row - Risk Gauge and Confidence
+            col1, col2, col3 = st.columns([2, 1, 1])
 
             with col1:
                 st.plotly_chart(
@@ -595,22 +910,99 @@ def main():
                 )
 
             with col2:
+                st.plotly_chart(
+                    create_confidence_gauge(result['confidence']),
+                    use_container_width=True
+                )
+
+            with col3:
                 # Simulated progression probabilities
                 prog_probs = [0.2, 0.5, 0.3] if result['risk_score'] < 0.5 else [0.1, 0.3, 0.6]
+                # Determine dominant progression type
+                prog_types = ['slow', 'moderate', 'rapid']
+                dominant_prog = prog_types[np.argmax(prog_probs)]
                 st.plotly_chart(
                     create_progression_chart(prog_probs),
                     use_container_width=True
                 )
 
-            # Recommendation
-            st.subheader("📋 Clinical Recommendation")
-            recommendation = get_recommendation(result['risk_score'], result['confidence'])
-            if "HIGH" in recommendation:
-                st.error(recommendation)
-            elif "Elevated" in recommendation or "Moderate" in recommendation:
-                st.warning(recommendation)
-            else:
-                st.success(recommendation)
+            st.markdown("---")
+
+            # ============================================================
+            # DECISION SUPPORT SECTION (Monitor / Genetic Testing / Urgent Review)
+            # ============================================================
+            st.subheader("🏥 Decision Support")
+
+            phenotype_count = sum([
+                clinical_data['small_jaw'],
+                clinical_data['prominent_eyes'],
+                clinical_data['thin_skin'],
+                clinical_data['hair_loss'],
+                clinical_data['lmna_mut']
+            ])
+
+            decision = get_decision_support(
+                result['risk_score'],
+                result['confidence'],
+                result['height_z'],
+                result['weight_z'],
+                phenotype_count
+            )
+
+            # Display primary action category prominently
+            action_colors = {
+                'MONITOR': ('🟢', '#d4edda', '#155724'),
+                'GENETIC_TESTING': ('🟡', '#fff3cd', '#856404'),
+                'URGENT_REVIEW': ('🔴', '#f8d7da', '#721c24')
+            }
+
+            action_emoji, bg_color, text_color = action_colors.get(
+                decision['primary_action'],
+                ('⚪', '#f8f9fa', '#212529')
+            )
+
+            st.markdown(f"""
+            <div style="background-color: {bg_color}; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
+                <h3 style="color: {text_color}; margin: 0;">
+                    {action_emoji} Primary Recommendation: {decision['primary_action'].replace('_', ' ')}
+                </h3>
+                <p style="color: {text_color}; margin: 5px 0 0 0;">
+                    Urgency Level: <strong>{decision['urgency'].upper()}</strong>
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Display action items in columns
+            col1, col2, col3 = st.columns(3)
+
+            # Group actions by priority
+            critical_actions = [a for a in decision['actions'] if a['priority'] == 'critical']
+            high_actions = [a for a in decision['actions'] if a['priority'] == 'high']
+            other_actions = [a for a in decision['actions'] if a['priority'] in ['recommended', 'standard']]
+
+            with col1:
+                st.markdown("**Critical Actions**")
+                if critical_actions:
+                    for action in critical_actions:
+                        st.error(f"{action['icon']} {action['text']}")
+                else:
+                    st.success("No critical actions required")
+
+            with col2:
+                st.markdown("**High Priority**")
+                if high_actions:
+                    for action in high_actions:
+                        st.warning(f"{action['icon']} {action['text']}")
+                else:
+                    st.info("No high priority actions")
+
+            with col3:
+                st.markdown("**Recommended**")
+                if other_actions:
+                    for action in other_actions:
+                        st.info(f"{action['icon']} {action['text']}")
+                else:
+                    st.success("Standard monitoring only")
 
             st.markdown("---")
 
@@ -620,6 +1012,33 @@ def main():
                 create_growth_curve(age, height, weight, result['risk_score'] > 0.5),
                 use_container_width=True
             )
+
+            st.markdown("---")
+
+            # ============================================================
+            # DISEASE PROGRESSION TIMELINE
+            # ============================================================
+            st.subheader("📅 Disease Progression Timeline")
+            st.caption("Projected disease trajectory based on current risk assessment")
+
+            # Determine progression type from probabilities
+            prog_probs = [0.2, 0.5, 0.3] if result['risk_score'] < 0.5 else [0.1, 0.3, 0.6]
+            prog_types = ['slow', 'moderate', 'rapid']
+            dominant_prog = prog_types[np.argmax(prog_probs)]
+
+            st.plotly_chart(
+                create_progression_timeline(age, result['risk_score'], dominant_prog),
+                use_container_width=True
+            )
+
+            # Progression summary
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Slow Progression", f"{prog_probs[0]:.0%}")
+            with col2:
+                st.metric("Moderate Progression", f"{prog_probs[1]:.0%}")
+            with col3:
+                st.metric("Rapid Progression", f"{prog_probs[2]:.0%}")
 
             st.markdown("---")
 

@@ -148,13 +148,25 @@ class ClassicalTabularModels:
             model.fit(X_train, y_train)
 
             # Calibrate if requested and validation data available
-            if self.calibrate and X_val is not None:
+            if self.calibrate and X_val is not None and len(X_val) >= 6:
                 logger.info(f"Calibrating {name}...")
-                calibrated = CalibratedClassifierCV(
-                    model, method='isotonic', cv='prefit'
-                )
-                calibrated.fit(X_val, y_val)
-                self.calibrated_models[name] = calibrated
+                try:
+                    # Use cross-validation based calibration (works with all sklearn versions)
+                    # Clone the base estimator for calibration
+                    from sklearn.base import clone
+                    base_model = clone(self.models[name])
+                    calibrated = CalibratedClassifierCV(
+                        base_model, method='isotonic', cv=3
+                    )
+                    # Fit on combined train+val data for calibration
+                    X_combined = np.vstack([X_train, X_val])
+                    y_combined = np.hstack([y_train, y_val])
+                    calibrated.fit(X_combined, y_combined)
+                    self.calibrated_models[name] = calibrated
+                except Exception as e:
+                    # Fallback: use uncalibrated model
+                    logger.warning(f"Calibration failed for {name}: {e}, using uncalibrated model")
+                    self.calibrated_models[name] = model
             else:
                 self.calibrated_models[name] = model
 

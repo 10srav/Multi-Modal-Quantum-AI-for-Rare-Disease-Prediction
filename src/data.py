@@ -474,11 +474,17 @@ class FacePreprocessor:
         # Try to initialize MediaPipe for better detection
         try:
             import mediapipe as mp
-            self.mp_face_detection = mp.solutions.face_detection
-            self.mp_face_mesh = mp.solutions.face_mesh
-            self.use_mediapipe = True
-            logger.info("Using MediaPipe for face detection")
-        except ImportError:
+            # Handle both old and new MediaPipe API versions
+            if hasattr(mp, 'solutions'):
+                self.mp_face_detection = mp.solutions.face_detection
+                self.mp_face_mesh = mp.solutions.face_mesh
+                self.use_mediapipe = True
+                logger.info("Using MediaPipe for face detection")
+            else:
+                # Newer MediaPipe versions have different API
+                self.use_mediapipe = False
+                logger.info("MediaPipe version not compatible, using OpenCV Haar Cascade")
+        except (ImportError, AttributeError):
             self.use_mediapipe = False
             logger.info("MediaPipe not available, using OpenCV Haar Cascade")
 
