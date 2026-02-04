@@ -322,7 +322,7 @@ class ModelManager:
             tabular_input_dim=11
         )
         self.fusion_model = self.fusion_model.to(self.device)
-        self.fusion_model.eval()
+        self.fusion_model.train(False)  # Set to evaluation mode
 
         fusion_weights = model_path / "fusion_model.pt"
         if fusion_weights.exists():
@@ -357,6 +357,18 @@ class ModelManager:
 
         self.tabular_model = ClassicalTabularModels(calibrate=True)
         self.tabular_model.fit(X_train, y_train, X_val, y_val)
+
+        # Initialize fusion model for demo
+        if self.fusion_model is None:
+            self.fusion_model = LateFusionClassifier(
+                face_embedding_dim=256,
+                tabular_embedding_dim=64,
+                tabular_input_dim=11
+            )
+            self.fusion_model = self.fusion_model.to(self.device)
+            self.fusion_model.train(False)  # Set to evaluation mode
+            self.model_info['fusion'] = True
+            logger.info("Initialized demo fusion model")
 
         logger.info("Demo models fitted")
 
@@ -430,7 +442,9 @@ class ModelManager:
         tabular_tensor: torch.Tensor
     ) -> Dict[str, Any]:
         """Make prediction with fusion model."""
-        self.fusion_model.eval()
+        if self.fusion_model is None:
+            raise ValueError("Fusion model not loaded")
+        self.fusion_model.train(False)  # Set to evaluation mode
         output = self.fusion_model.predict_proba(image_tensor, tabular_tensor)
 
         risk_probs = output['risk_probs'].cpu().numpy()[0]
