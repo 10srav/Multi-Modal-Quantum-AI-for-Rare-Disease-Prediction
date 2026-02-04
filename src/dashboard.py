@@ -65,12 +65,20 @@ st.markdown("""
 
 @st.cache_resource
 def load_models():
-    """Load ML models (cached for performance)."""
+    """Load all ML models including fusion, quantum, classical, and TabularMLP models."""
     try:
         from src.data import FacePreprocessor, TabularPreprocessor, generate_hgps_tabular_data
         from src.models import ClassicalTabularModels
+        from src.features import LateFusionClassifier
+        from src.features.tabular_mlp import TabularMLP
+        from src.qml.qsvm import QuantumSVM, HAS_QISKIT as HAS_QSVM
+        from src.qml.qnn import QuantumNeuralNetwork, HAS_QISKIT as HAS_QNN
+        from src.qml.fusion_quantum import FusionQuantumBridge
+        import torch
+        import torch.nn as nn
+        import torch.optim as optim
+        from sklearn.preprocessing import MinMaxScaler
 
-        # Initialize preprocessors
         face_preprocessor = FacePreprocessor()
         tabular_preprocessor = TabularPreprocessor()
 
@@ -81,21 +89,165 @@ def load_models():
         features = tabular_preprocessor.transform(df)
         labels = df['risk_label'].values
 
+        # Generate progression labels (0=slow, 1=moderate, 2=rapid) based on risk
+        np.random.seed(42)  # Reproducibility
+        progression_labels = np.where(labels == 0, 0, np.where(np.random.rand(len(labels)) < 0.5, 1, 2))
+
         split_idx = int(0.8 * len(features))
         X_train, X_val = features[:split_idx], features[split_idx:]
         y_train, y_val = labels[:split_idx], labels[split_idx:]
+        prog_train, prog_val = progression_labels[:split_idx], progression_labels[split_idx:]
 
+        # Classical tabular model (for risk only)
         tabular_model = ClassicalTabularModels(calibrate=True)
         tabular_model.fit(X_train, y_train, X_val, y_val)
+
+        # Device setup
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        # ============================================================
+        # TabularMLP for tabular-only predictions (risk + progression)
+        # ============================================================
+        st.info("Training TabularMLP for multi-task predictions...")
+        tabular_mlp = TabularMLP(input_dim=11).to(device)
+        tabular_mlp.train()
+        mlp_optimizer = optim.Adam(tabular_mlp.parameters(), lr=0.001)
+        risk_criterion = nn.CrossEntropyLoss()
+        prog_criterion = nn.CrossEntropyLoss()
+
+        n_epochs_mlp = 30
+        batch_size = 16
+
+        for epoch in range(n_epochs_mlp):
+            indices = np.random.permutation(len(X_train))
+            for i in range(0, len(indices), batch_size):
+                batch_idx = indices[i:i+batch_size]
+                if len(batch_idx) < 2:
+                    continue
+
+                batch_tabular = torch.from_numpy(X_train[batch_idx]).float().to(device)
+                batch_risk_labels = torch.from_numpy(y_train[batch_idx]).long().to(device)
+                batch_prog_labels = torch.from_numpy(prog_train[batch_idx]).long().to(device)
+
+                mlp_optimizer.zero_grad()
+                output = tabular_mlp(batch_tabular)
+
+                loss = risk_criterion(output['risk_logits'], batch_risk_labels) + \
+                       0.5 * prog_criterion(output['progression_logits'], batch_prog_labels)
+
+                loss.backward()
+                mlp_optimizer.step()
+
+        tabular_mlp.train(False)  # Set to eval mode
+        st.success("TabularMLP trained!")
+
+        # ============================================================
+        # Fusion model for multi-modal predictions
+        # ============================================================
+        fusion_model = LateFusionClassifier(
+            face_embedding_dim=256, tabular_embedding_dim=64,
+            tabular_input_dim=11, pretrained_face=True, freeze_face_backbone=True
+        ).to(device)
+
+        st.info("Training fusion model...")
+        fusion_model.train()
+        optimizer = optim.Adam(fusion_model.parameters(), lr=0.001)
+
+        # Create synthetic training images for fusion model
+        n_epochs = 20
+        train_images = torch.randn(len(X_train), 3, 224, 224)  # Store for later use
+
+        for epoch in range(n_epochs):
+            indices = np.random.permutation(len(X_train))
+            epoch_loss = 0.0
+
+            for i in range(0, len(indices), batch_size):
+                batch_idx = indices[i:i+batch_size]
+                if len(batch_idx) < 2:
+                    continue
+
+                batch_images = train_images[batch_idx].to(device)
+                batch_tabular = torch.from_numpy(X_train[batch_idx]).float().to(device)
+                batch_risk_labels = torch.from_numpy(y_train[batch_idx]).long().to(device)
+                batch_prog_labels = torch.from_numpy(prog_train[batch_idx]).long().to(device)
+
+                optimizer.zero_grad()
+                output = fusion_model(batch_images, batch_tabular)
+
+                loss = risk_criterion(output['risk_logits'], batch_risk_labels) + \
+                       0.5 * prog_criterion(output['progression_logits'], batch_prog_labels)
+
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item()
+
+        fusion_model.train(False)  # Set to eval mode
+        st.success("Fusion model trained!")
+
+        # ============================================================
+        # Create FusionQuantumBridge for quantum models
+        # ============================================================
+        st.info("Creating Fusion-Quantum bridge...")
+        fusion_bridge = FusionQuantumBridge(
+            fusion_model=fusion_model,
+            device=device,
+            n_quantum_features=6
+        )
+
+        # Extract training embeddings from fusion model
+        fusion_bridge_embeddings = fusion_bridge.extract_embeddings_batch(
+            train_images, X_train, batch_size=batch_size
+        )
+        fusion_bridge.fit(fusion_bridge_embeddings)
+
+        # Get quantum features from fused embeddings
+        qml_fused_train = fusion_bridge.transform(fusion_bridge_embeddings)
+        st.success("Fusion-Quantum bridge created!")
+
+        # ============================================================
+        # QML features (fallback: 6 key tabular features)
+        # ============================================================
+        qml_cols = ['age', 'height_z_score', 'weight_z_score', 'small_jaw', 'prominent_eyes', 'lmna_mut']
+        qml_scaler = MinMaxScaler()
+        qml_train_raw = qml_scaler.fit_transform(df[qml_cols].values[:split_idx])
+
+        # ============================================================
+        # Train Quantum models on FUSED embeddings (primary)
+        # Limit samples for quantum training (O(n²) kernel computation)
+        # ============================================================
+        max_qml_samples = 50  # Limit for faster quantum training
+        qml_train_subset = qml_fused_train[:max_qml_samples]
+        y_train_subset = y_train[:max_qml_samples]
+
+        st.info(f"Training QSVM on {len(qml_train_subset)} samples (Quantum: {HAS_QSVM})...")
+        qsvm_model = QuantumSVM(num_features=6, use_quantum=HAS_QSVM)
+        qsvm_model.fit(qml_train_subset, y_train_subset)
+        st.success("QSVM trained on fused embeddings!")
+
+        st.info(f"Training QNN on {len(qml_train_subset)} samples (Quantum: {HAS_QNN})...")
+        qnn_model = QuantumNeuralNetwork(num_features=6, max_iter=30, use_quantum=HAS_QNN)
+        qnn_model.fit(qml_train_subset, y_train_subset)
+        st.success("QNN trained on fused embeddings!")
 
         return {
             'face_preprocessor': face_preprocessor,
             'tabular_preprocessor': tabular_preprocessor,
             'tabular_model': tabular_model,
+            'tabular_mlp': tabular_mlp,
+            'fusion_model': fusion_model,
+            'fusion_bridge': fusion_bridge,
+            'qsvm_model': qsvm_model,
+            'qnn_model': qnn_model,
+            'qml_scaler': qml_scaler,
+            'qml_feature_names': qml_cols,
+            'device': device,
+            'has_quantum': HAS_QSVM or HAS_QNN,
             'loaded': True
         }
     except Exception as e:
         st.error(f"Error loading models: {e}")
+        import traceback
+        st.error(traceback.format_exc())
         return {'loaded': False, 'error': str(e)}
 
 
@@ -117,8 +269,11 @@ def compute_derived_features(age, height_cm, weight_kg):
     return bmi, height_z, weight_z
 
 
-def make_prediction(models, clinical_data):
-    """Make prediction using loaded models."""
+def make_prediction(models, clinical_data, face_image_tensor=None):
+    """Make prediction using fusion model with face image and clinical data."""
+    import torch
+    import torch.nn.functional as F
+
     if not models.get('loaded'):
         return None
 
@@ -141,19 +296,195 @@ def make_prediction(models, clinical_data):
     df = pd.DataFrame(features, columns=feature_cols)
     features_scaled = models['tabular_preprocessor'].transform(df)
 
-    probs = models['tabular_model'].predict_proba(features_scaled)
-    pred = models['tabular_model'].predict(features_scaled)
+    device = models.get('device', torch.device('cpu'))
+    tabular_tensor = torch.from_numpy(features_scaled).float().to(device)
 
-    risk_score = float(probs[0, 1]) if probs.shape[1] > 1 else float(probs[0, 0])
+    # Use fusion model if face image is provided
+    if face_image_tensor is not None and models.get('fusion_model') is not None:
+        fusion_model = models['fusion_model']
+        with torch.no_grad():
+            output = fusion_model(face_image_tensor.to(device), tabular_tensor)
+            risk_probs = F.softmax(output['risk_logits'], dim=1).cpu().numpy()[0]
+            prog_probs = F.softmax(output['progression_logits'], dim=1).cpu().numpy()[0]
+
+        risk_score = float(risk_probs[1])
+        progression_probs = prog_probs.tolist()
+        model_type = 'Multi-Modal Fusion (CNN + Clinical)'
+    else:
+        # Use TabularMLP for tabular-only predictions (risk + progression)
+        # This replaces the hardcoded progression logic with real model output
+        tabular_mlp = models.get('tabular_mlp')
+
+        if tabular_mlp is not None:
+            with torch.no_grad():
+                output = tabular_mlp(tabular_tensor)
+                risk_probs = F.softmax(output['risk_logits'], dim=1).cpu().numpy()[0]
+                prog_probs = F.softmax(output['progression_logits'], dim=1).cpu().numpy()[0]
+
+            risk_score = float(risk_probs[1])
+            progression_probs = prog_probs.tolist()
+            model_type = 'TabularMLP (Clinical Only)'
+        else:
+            # Fallback to classical tabular model (risk only)
+            probs = models['tabular_model'].predict_proba(features_scaled)
+            risk_score = float(probs[0, 1]) if probs.shape[1] > 1 else float(probs[0, 0])
+
+            # Simple fallback progression estimate (only if TabularMLP unavailable)
+            progression_probs = [0.33, 0.34, 0.33]
+            model_type = 'Classical Tabular (SVM)'
 
     return {
         'risk_score': risk_score,
         'risk_class': get_risk_class(risk_score),
-        'prediction': int(pred[0]),
-        'confidence': compute_confidence(probs[0]),
+        'prediction': 1 if risk_score >= 0.5 else 0,
+        'confidence': compute_confidence(np.array([1-risk_score, risk_score])),
         'height_z': height_z,
-        'weight_z': weight_z
+        'weight_z': weight_z,
+        'progression_probs': progression_probs,
+        'model_type': model_type
     }
+
+
+def make_quantum_prediction(models, clinical_data, face_tensor=None):
+    """Make prediction using quantum models (QSVM and QNN).
+
+    If face_tensor is provided and fusion_bridge exists, uses fused embeddings
+    for quantum prediction. Otherwise falls back to raw tabular features.
+
+    Args:
+        models: Dictionary of loaded models
+        clinical_data: Dictionary of clinical features
+        face_tensor: Optional face image tensor for fusion-based quantum features
+
+    Returns:
+        Tuple of (qsvm_result, qnn_result) dictionaries
+    """
+    import torch
+
+    if not models.get('loaded') or models.get('qsvm_model') is None:
+        return None, None
+
+    age = clinical_data['age']
+    height = clinical_data['height_cm']
+    weight = clinical_data['weight_kg']
+
+    bmi, height_z, weight_z = compute_derived_features(age, height, weight)
+
+    device = models.get('device', torch.device('cpu'))
+
+    # Prepare tabular features
+    features = np.array([
+        age, height, weight, bmi, height_z, weight_z,
+        clinical_data['small_jaw'],
+        clinical_data['prominent_eyes'],
+        clinical_data['thin_skin'],
+        clinical_data['hair_loss'],
+        clinical_data['lmna_mut']
+    ], dtype=np.float32).reshape(1, -1)
+
+    feature_cols = models['tabular_preprocessor'].feature_columns
+    df = pd.DataFrame(features, columns=feature_cols)
+    features_scaled = models['tabular_preprocessor'].transform(df)
+    tabular_tensor = torch.from_numpy(features_scaled).float().to(device)
+
+    # Determine feature source: fusion-based or raw tabular
+    fusion_bridge = models.get('fusion_bridge')
+    feature_source = 'tabular'
+
+    if face_tensor is not None and fusion_bridge is not None and fusion_bridge.is_fitted:
+        # Use fusion-based quantum features (fused embeddings -> PCA -> 6 features)
+        try:
+            qml_features_scaled = fusion_bridge.get_quantum_features(
+                face_tensor.to(device),
+                tabular_tensor
+            )
+            feature_source = 'fusion'
+        except Exception as e:
+            # Fallback to raw tabular features on error
+            qml_features = np.array([
+                age, height_z, weight_z,
+                clinical_data['small_jaw'],
+                clinical_data['prominent_eyes'],
+                clinical_data['lmna_mut']
+            ], dtype=np.float32).reshape(1, -1)
+            qml_features_scaled = models['qml_scaler'].transform(qml_features)
+            feature_source = 'tabular'
+    else:
+        # Fallback to raw tabular features (6 key features)
+        qml_features = np.array([
+            age, height_z, weight_z,
+            clinical_data['small_jaw'],
+            clinical_data['prominent_eyes'],
+            clinical_data['lmna_mut']
+        ], dtype=np.float32).reshape(1, -1)
+        qml_features_scaled = models['qml_scaler'].transform(qml_features)
+
+    # QSVM prediction
+    qsvm_result = None
+    if models.get('qsvm_model') is not None:
+        qsvm_probs = models['qsvm_model'].predict_proba(qml_features_scaled)
+        qsvm_score = float(qsvm_probs[0, 1]) if qsvm_probs.shape[1] > 1 else float(qsvm_probs[0, 0])
+
+        # Build model type label with feature source indicator
+        quantum_label = 'Quantum' if models['qsvm_model'].use_quantum else 'Classical'
+        qsvm_result = {
+            'risk_score': qsvm_score,
+            'risk_class': get_risk_class(qsvm_score),
+            'model_type': f'QSVM ({quantum_label}, {feature_source})',
+            'feature_source': feature_source
+        }
+
+    # QNN prediction
+    qnn_result = None
+    if models.get('qnn_model') is not None:
+        qnn_probs = models['qnn_model'].predict_proba(qml_features_scaled)
+        qnn_score = float(qnn_probs[0, 1]) if qnn_probs.shape[1] > 1 else float(qnn_probs[0, 0])
+
+        # Build model type label with feature source indicator
+        quantum_label = 'Quantum' if models['qnn_model'].use_quantum else 'Classical'
+        qnn_result = {
+            'risk_score': qnn_score,
+            'risk_class': get_risk_class(qnn_score),
+            'model_type': f'QNN ({quantum_label}, {feature_source})',
+            'feature_source': feature_source
+        }
+
+    return qsvm_result, qnn_result
+
+
+def preprocess_face_image(face_image_bytes, models):
+    """Preprocess face image for model input."""
+    import torch
+
+    if face_image_bytes is None or models.get('face_preprocessor') is None:
+        return None
+
+    # Decode image
+    img_array = np.frombuffer(face_image_bytes, np.uint8)
+    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
+    if img is None:
+        return None
+
+    # Use face preprocessor to detect and align
+    face_preprocessor = models['face_preprocessor']
+    aligned = face_preprocessor.detect_and_align(img)
+
+    if aligned is None:
+        aligned = cv2.resize(img, (224, 224))
+
+    # Convert BGR to RGB and normalize
+    aligned_rgb = cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB)
+
+    # Normalize with ImageNet stats
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    normalized = (aligned_rgb.astype(np.float32) / 255.0 - mean) / std
+
+    # Convert to tensor (B, C, H, W)
+    tensor = torch.from_numpy(normalized).float().permute(2, 0, 1).unsqueeze(0)
+
+    return tensor
 
 
 def get_risk_class(score):
@@ -561,14 +892,15 @@ def create_feature_importance_chart(importance_dict):
 # REPORT GENERATION
 # ============================================================================
 
-def generate_report(clinical_data, result, quantum_score):
+def generate_report(clinical_data, result, qsvm_result, qnn_result):
     """
     Generate a downloadable text report of the HGPS risk assessment.
 
     Args:
         clinical_data: Dictionary of patient clinical data
         result: Prediction result dictionary
-        quantum_score: Quantum ML prediction score
+        qsvm_result: QSVM prediction result dictionary
+        qnn_result: QNN prediction result dictionary
 
     Returns:
         Report content as string
@@ -594,6 +926,21 @@ def generate_report(clinical_data, result, quantum_score):
 
     # Format action items
     action_items = "\n".join([f"  [{a['priority'].upper()}] {a['text']}" for a in decision['actions']])
+
+    # Format quantum results
+    qsvm_score_str = f"{qsvm_result['risk_score']:.1%}" if qsvm_result else 'N/A'
+    qsvm_type = qsvm_result.get('model_type', 'QSVM') if qsvm_result else 'QSVM'
+    qnn_score_str = f"{qnn_result['risk_score']:.1%}" if qnn_result else 'N/A'
+    qnn_type = qnn_result.get('model_type', 'QNN') if qnn_result else 'QNN'
+
+    # Calculate model agreement
+    all_scores = [result['risk_score']]
+    if qsvm_result:
+        all_scores.append(qsvm_result['risk_score'])
+    if qnn_result:
+        all_scores.append(qnn_result['risk_score'])
+    max_diff = max(all_scores) - min(all_scores) if len(all_scores) > 1 else 0
+    agreement = 'HIGH' if max_diff < 0.1 else 'MODERATE' if max_diff < 0.25 else 'LOW'
 
     report = f"""
 ================================================================================
@@ -646,8 +993,9 @@ Action Items:
 --------------------------------------------------------------------------------
 
 Classical ML Risk Score:    {result['risk_score']:.1%}
-Quantum ML Risk Score:      {quantum_score:.1%}
-Model Agreement:            {'HIGH' if abs(result['risk_score'] - quantum_score) < 0.05 else 'MODERATE' if abs(result['risk_score'] - quantum_score) < 0.15 else 'LOW'}
+{qsvm_type} Risk Score:     {qsvm_score_str}
+{qnn_type} Risk Score:      {qnn_score_str}
+Model Agreement:            {agreement}
 
 --------------------------------------------------------------------------------
                       CLINICAL RECOMMENDATION
@@ -666,7 +1014,7 @@ decision-making.
 
 The predictions are based on:
 - Multi-modal deep learning (CNN + Clinical data fusion)
-- Quantum Machine Learning (QSVM/VQC via Qiskit)
+- Quantum Machine Learning (QSVM/QNN via Qiskit)
 - Trained on synthetic HGPS phenotype data
 
 ================================================================================
@@ -676,7 +1024,7 @@ The predictions are based on:
     return report
 
 
-def generate_csv_report(clinical_data, result, quantum_score):
+def generate_csv_report(clinical_data, result, qsvm_result, qnn_result):
     """Generate a CSV format report for data export."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -714,7 +1062,10 @@ def generate_csv_report(clinical_data, result, quantum_score):
         'Height_Z_Score': [result['height_z']],
         'Weight_Z_Score': [result['weight_z']],
         'Classical_ML_Score': [result['risk_score']],
-        'Quantum_ML_Score': [quantum_score],
+        'QSVM_Score': [qsvm_result['risk_score'] if qsvm_result else None],
+        'QSVM_Type': [qsvm_result.get('model_type', 'QSVM') if qsvm_result else None],
+        'QNN_Score': [qnn_result['risk_score'] if qnn_result else None],
+        'QNN_Type': [qnn_result.get('model_type', 'QNN') if qnn_result else None],
         'Primary_Recommendation': [decision['primary_action']],
         'Urgency_Level': [decision['urgency']],
     }
@@ -723,23 +1074,31 @@ def generate_csv_report(clinical_data, result, quantum_score):
     return df.to_csv(index=False)
 
 
-def create_comparison_chart(classical_score, quantum_score):
-    """Create classical vs quantum comparison chart."""
+def create_comparison_chart(model_scores):
+    """Create multi-model comparison chart.
+
+    Args:
+        model_scores: dict with model names as keys and (score, color) tuples as values
+    """
     fig = go.Figure()
 
+    names = list(model_scores.keys())
+    scores = [model_scores[n][0] * 100 for n in names]
+    colors = [model_scores[n][1] for n in names]
+
     fig.add_trace(go.Bar(
-        x=['Classical ML', 'Quantum ML'],
-        y=[classical_score * 100, quantum_score * 100],
-        marker_color=['#1f77b4', '#9467bd'],
-        text=[f'{classical_score:.1%}', f'{quantum_score:.1%}'],
+        x=names,
+        y=scores,
+        marker_color=colors,
+        text=[f'{s:.1f}%' for s in scores],
         textposition='auto'
     ))
 
     fig.update_layout(
-        title='Classical vs Quantum ML Prediction',
+        title='Multi-Model Risk Prediction Comparison',
         yaxis_title='Risk Score (%)',
         yaxis_range=[0, 100],
-        height=300,
+        height=350,
         margin=dict(l=20, r=20, t=50, b=20)
     )
 
@@ -850,6 +1209,17 @@ def main():
     hair_loss = st.sidebar.checkbox("Hair loss (alopecia)")
     lmna_mut = st.sidebar.checkbox("LMNA mutation known")
 
+    # Model selection
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Model Selection")
+    model_choice = st.sidebar.selectbox(
+        "Primary Model",
+        ["Auto (Best Available)", "Multi-Modal Fusion", "TabularMLP (Clinical Only)",
+         "Classical Tabular (SVM)", "QSVM (Quantum)", "QNN (Quantum)"],
+        index=0,
+        help="Select which model to use for primary prediction. 'Auto' selects the best available based on inputs."
+    )
+
     # Analyze button
     analyze = st.sidebar.button("🔬 Analyze", use_container_width=True, type="primary")
 
@@ -866,12 +1236,102 @@ def main():
             'lmna_mut': int(lmna_mut)
         }
 
-        with st.spinner("Analyzing..."):
-            result = make_prediction(models, clinical_data)
+        with st.spinner("Analyzing with multi-modal AI..."):
+            import torch
+            import torch.nn.functional as F
+
+            # Preprocess face image if provided
+            face_tensor = None
+            if face_image is not None:
+                face_bytes = face_image.getvalue()
+                face_tensor = preprocess_face_image(face_bytes, models)
+                if face_tensor is not None:
+                    st.sidebar.success("Face image processed for fusion model")
+
+            # Make quantum predictions (always compute for comparison)
+            qsvm_result, qnn_result = make_quantum_prediction(models, clinical_data, face_tensor)
+
+            # Make main prediction based on model choice
+            if model_choice == "Auto (Best Available)":
+                # Auto: Use fusion if face available, else TabularMLP
+                result = make_prediction(models, clinical_data, face_tensor)
+            elif model_choice == "Multi-Modal Fusion":
+                # Force fusion model (requires face image)
+                if face_tensor is not None:
+                    result = make_prediction(models, clinical_data, face_tensor)
+                else:
+                    st.warning("Multi-Modal Fusion requires a face image. Falling back to TabularMLP.")
+                    result = make_prediction(models, clinical_data, None)
+            elif model_choice == "TabularMLP (Clinical Only)":
+                # Force TabularMLP (ignore face image)
+                result = make_prediction(models, clinical_data, None)
+            elif model_choice == "Classical Tabular (SVM)":
+                # Use classical tabular model
+                bmi, height_z, weight_z = compute_derived_features(
+                    clinical_data['age'], clinical_data['height_cm'], clinical_data['weight_kg']
+                )
+                features = np.array([
+                    clinical_data['age'], clinical_data['height_cm'], clinical_data['weight_kg'],
+                    bmi, height_z, weight_z,
+                    clinical_data['small_jaw'], clinical_data['prominent_eyes'],
+                    clinical_data['thin_skin'], clinical_data['hair_loss'], clinical_data['lmna_mut']
+                ], dtype=np.float32).reshape(1, -1)
+                feature_cols = models['tabular_preprocessor'].feature_columns
+                df_features = pd.DataFrame(features, columns=feature_cols)
+                features_scaled = models['tabular_preprocessor'].transform(df_features)
+                probs = models['tabular_model'].predict_proba(features_scaled)
+                risk_score = float(probs[0, 1]) if probs.shape[1] > 1 else float(probs[0, 0])
+                result = {
+                    'risk_score': risk_score,
+                    'risk_class': get_risk_class(risk_score),
+                    'prediction': 1 if risk_score >= 0.5 else 0,
+                    'confidence': compute_confidence(np.array([1-risk_score, risk_score])),
+                    'height_z': height_z,
+                    'weight_z': weight_z,
+                    'progression_probs': [0.33, 0.34, 0.33],  # Classical model doesn't predict progression
+                    'model_type': 'Classical Tabular (SVM)'
+                }
+            elif model_choice == "QSVM (Quantum)" and qsvm_result is not None:
+                # Use QSVM as primary
+                bmi, height_z, weight_z = compute_derived_features(
+                    clinical_data['age'], clinical_data['height_cm'], clinical_data['weight_kg']
+                )
+                result = {
+                    'risk_score': qsvm_result['risk_score'],
+                    'risk_class': qsvm_result['risk_class'],
+                    'prediction': 1 if qsvm_result['risk_score'] >= 0.5 else 0,
+                    'confidence': compute_confidence(np.array([1-qsvm_result['risk_score'], qsvm_result['risk_score']])),
+                    'height_z': height_z,
+                    'weight_z': weight_z,
+                    'progression_probs': [0.33, 0.34, 0.33],  # Quantum models don't predict progression
+                    'model_type': qsvm_result['model_type']
+                }
+            elif model_choice == "QNN (Quantum)" and qnn_result is not None:
+                # Use QNN as primary
+                bmi, height_z, weight_z = compute_derived_features(
+                    clinical_data['age'], clinical_data['height_cm'], clinical_data['weight_kg']
+                )
+                result = {
+                    'risk_score': qnn_result['risk_score'],
+                    'risk_class': qnn_result['risk_class'],
+                    'prediction': 1 if qnn_result['risk_score'] >= 0.5 else 0,
+                    'confidence': compute_confidence(np.array([1-qnn_result['risk_score'], qnn_result['risk_score']])),
+                    'height_z': height_z,
+                    'weight_z': weight_z,
+                    'progression_probs': [0.33, 0.34, 0.33],  # Quantum models don't predict progression
+                    'model_type': qnn_result['model_type']
+                }
+            else:
+                # Fallback to auto
+                result = make_prediction(models, clinical_data, face_tensor)
 
         if result:
             # Results section
             st.header("📊 Analysis Results")
+
+            # Show which model was used
+            model_type = result.get('model_type', 'Unknown')
+            st.info(f"**Primary Model:** {model_type}")
 
             # Top metrics row
             col1, col2, col3, col4 = st.columns(4)
@@ -916,9 +1376,8 @@ def main():
                 )
 
             with col3:
-                # Simulated progression probabilities
-                prog_probs = [0.2, 0.5, 0.3] if result['risk_score'] < 0.5 else [0.1, 0.3, 0.6]
-                # Determine dominant progression type
+                # Use actual progression probabilities from model
+                prog_probs = result.get('progression_probs', [0.33, 0.34, 0.33])
                 prog_types = ['slow', 'moderate', 'rapid']
                 dominant_prog = prog_types[np.argmax(prog_probs)]
                 st.plotly_chart(
@@ -1019,10 +1478,10 @@ def main():
             # DISEASE PROGRESSION TIMELINE
             # ============================================================
             st.subheader("📅 Disease Progression Timeline")
-            st.caption("Projected disease trajectory based on current risk assessment")
+            st.caption("Projected disease trajectory based on fusion model output")
 
-            # Determine progression type from probabilities
-            prog_probs = [0.2, 0.5, 0.3] if result['risk_score'] < 0.5 else [0.1, 0.3, 0.6]
+            # Use actual progression probabilities from model
+            prog_probs = result.get('progression_probs', [0.33, 0.34, 0.33])
             prog_types = ['slow', 'moderate', 'rapid']
             dominant_prog = prog_types[np.argmax(prog_probs)]
 
@@ -1031,7 +1490,7 @@ def main():
                 use_container_width=True
             )
 
-            # Progression summary
+            # Progression summary with model source indicator
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Slow Progression", f"{prog_probs[0]:.0%}")
@@ -1040,36 +1499,85 @@ def main():
             with col3:
                 st.metric("Rapid Progression", f"{prog_probs[2]:.0%}")
 
+            # Show caption based on actual model used
+            model_type = result.get('model_type', '')
+            if 'Fusion' in model_type:
+                st.caption("*Progression predicted by multi-modal fusion model using face + clinical data*")
+            elif 'TabularMLP' in model_type:
+                st.caption("*Progression predicted by TabularMLP using clinical data (model-based, not hardcoded)*")
+            else:
+                st.caption("*Progression estimated from clinical data (upload face image for multi-modal fusion)*")
+
             st.markdown("---")
 
             # Model comparison section
-            st.subheader("🔬 Classical vs Quantum ML Comparison")
+            st.subheader("🔬 Multi-Model Risk Prediction Comparison")
 
             col1, col2 = st.columns([2, 1])
 
             with col1:
-                # Simulated quantum result (slightly different for demo)
-                quantum_score = result['risk_score'] * 0.95 + 0.025
+                # Build model scores dict with all available models
+                model_scores = {}
+
+                # Primary model result
+                primary_label = result.get('model_type', 'Primary Model')
+                model_scores[primary_label] = (result['risk_score'], '#1f77b4')
+
+                # Add QSVM prediction (with feature source indicator)
+                if qsvm_result is not None:
+                    qsvm_label = qsvm_result.get('model_type', 'QSVM')
+                    model_scores[qsvm_label] = (qsvm_result['risk_score'], '#9467bd')
+
+                # Add QNN prediction (with feature source indicator)
+                if qnn_result is not None:
+                    qnn_label = qnn_result.get('model_type', 'QNN')
+                    model_scores[qnn_label] = (qnn_result['risk_score'], '#e377c2')
+
+                # Add Fusion model if face image was used and it's not already shown
+                if face_tensor is not None and 'Fusion' not in primary_label:
+                    model_scores['Fusion (Face+Clinical)'] = (result['risk_score'], '#2ca02c')
+
                 st.plotly_chart(
-                    create_comparison_chart(result['risk_score'], quantum_score),
+                    create_comparison_chart(model_scores),
                     use_container_width=True
                 )
 
             with col2:
-                st.markdown("**Model Agreement**")
-                diff = abs(result['risk_score'] - quantum_score)
-                if diff < 0.05:
-                    st.success("High agreement between models")
-                elif diff < 0.15:
-                    st.info("Moderate agreement")
-                else:
-                    st.warning("Models show disagreement")
+                st.markdown("**Model Predictions**")
 
-                st.markdown("**Classical ML**")
+                # Show primary model
+                st.markdown(f"**{result.get('model_type', 'Primary Model')}**")
                 st.write(f"Risk: {result['risk_score']:.1%}")
 
-                st.markdown("**Quantum ML**")
-                st.write(f"Risk: {quantum_score:.1%}")
+                if qsvm_result is not None:
+                    st.markdown(f"**{qsvm_result.get('model_type', 'QSVM')}**")
+                    st.write(f"Risk: {qsvm_result['risk_score']:.1%}")
+                    if qsvm_result.get('feature_source') == 'fusion':
+                        st.caption("Uses fused embeddings")
+
+                if qnn_result is not None:
+                    st.markdown(f"**{qnn_result.get('model_type', 'QNN')}**")
+                    st.write(f"Risk: {qnn_result['risk_score']:.1%}")
+                    if qnn_result.get('feature_source') == 'fusion':
+                        st.caption("Uses fused embeddings")
+
+                # Model agreement analysis
+                st.markdown("---")
+                st.markdown("**Model Agreement**")
+                all_scores = [result['risk_score']]
+                if qsvm_result:
+                    all_scores.append(qsvm_result['risk_score'])
+                if qnn_result:
+                    all_scores.append(qnn_result['risk_score'])
+
+                if len(all_scores) > 1:
+                    max_diff = max(all_scores) - min(all_scores)
+                    if max_diff < 0.1:
+                        st.success("High agreement across models")
+                    elif max_diff < 0.25:
+                        st.info("Moderate agreement")
+                    else:
+                        st.warning("Models show disagreement - review recommended")
 
             # Feature importance
             st.markdown("---")
@@ -1094,7 +1602,7 @@ def main():
 
             with col1:
                 # Text report download
-                text_report = generate_report(clinical_data, result, quantum_score)
+                text_report = generate_report(clinical_data, result, qsvm_result, qnn_result)
                 st.download_button(
                     label="📄 Download Text Report",
                     data=text_report,
@@ -1105,7 +1613,7 @@ def main():
 
             with col2:
                 # CSV report download
-                csv_report = generate_csv_report(clinical_data, result, quantum_score)
+                csv_report = generate_csv_report(clinical_data, result, qsvm_result, qnn_result)
                 st.download_button(
                     label="📊 Download CSV Data",
                     data=csv_report,

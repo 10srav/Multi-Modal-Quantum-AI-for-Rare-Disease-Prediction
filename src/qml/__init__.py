@@ -5,6 +5,7 @@ Implements:
 - Quantum Support Vector Machine (QSVM)
 - Variational Quantum Classifier (QNN/VQC)
 - Quantum feature maps and ansatzes
+- Fusion-Quantum bridge for multi-modal embeddings
 """
 
 from .qsvm import QuantumSVM, train_qsvm, evaluate_qsvm
@@ -15,6 +16,7 @@ from .quantum_features import (
     ZZFeatureMap,
     RealAmplitudes
 )
+from .fusion_quantum import FusionQuantumBridge, create_fusion_quantum_bridge
 
 __all__ = [
     'QuantumSVM',
@@ -26,5 +28,7 @@ __all__ = [
     'create_feature_map',
     'create_ansatz',
     'ZZFeatureMap',
-    'RealAmplitudes'
+    'RealAmplitudes',
+    'FusionQuantumBridge',
+    'create_fusion_quantum_bridge'
 ]
