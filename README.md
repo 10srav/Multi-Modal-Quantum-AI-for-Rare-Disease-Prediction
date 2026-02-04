@@ -33,6 +33,7 @@
 - [Model Performance](#model-performance)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Beginner's Quick Start Guide](#beginners-quick-start-guide)
 - [API Reference](#api-reference)
 - [Dashboard](#dashboard)
 - [Production Deployment](#production-deployment)
@@ -285,6 +286,78 @@ python -m src.train --all
 
 # Retrain with real images
 python retrain_with_real_images.py
+```
+
+---
+
+## Beginner's Quick Start Guide
+
+If you're new to this project, follow these simple steps:
+
+### Step 1: Clone the Repository
+```bash
+git clone https://github.com/10srav/Multi-Modal-Quantum-AI-for-Rare-Disease-Prediction.git
+cd Multi-Modal-Quantum-AI-for-Rare-Disease-Prediction
+```
+
+### Step 2: Create Virtual Environment
+```bash
+# Windows
+python -m venv venv
+venv\Scripts\activate
+
+# Mac/Linux
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### Step 3: Install Dependencies
+```bash
+pip install -r requirements.txt
+pip install qiskit qiskit-machine-learning qiskit-aer
+```
+
+### Step 4: Run the Dashboard
+```bash
+python -m streamlit run src/dashboard.py
+```
+
+### Step 5: Open in Browser
+The dashboard will automatically open, or go to: **http://localhost:8501**
+
+### What You'll See
+
+1. **Sidebar** - Enter patient information:
+   - Upload a face image (optional)
+   - Enter age, height, weight
+   - Check phenotypic features
+   - Select model type (Auto/Fusion/TabularMLP/QSVM/QNN)
+
+2. **Click "Analyze"** - Get predictions from:
+   - Multi-Modal Fusion (CNN + Clinical)
+   - TabularMLP (Clinical Only)
+   - QSVM (Quantum SVM)
+   - QNN (Quantum Neural Network)
+
+3. **View Results**:
+   - Risk score and classification
+   - Disease progression prediction
+   - Model comparison chart
+   - Clinical recommendations
+   - Downloadable reports (Text/CSV)
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Streamlit not found | `pip install streamlit` |
+| Models take long to load | Wait 1-2 minutes (first time only) |
+| Port 8501 is busy | `python -m streamlit run src/dashboard.py --server.port 8502` |
+| Qiskit import errors | `pip install qiskit qiskit-machine-learning qiskit-aer` |
+
+### Run Tests (Optional)
+```bash
+pytest tests/ -v
 ```
 
 ---
